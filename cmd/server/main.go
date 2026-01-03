@@ -4,12 +4,16 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/AndrewDonelson/track-studio-orchestrator/config"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/handlers"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/worker"
 	"github.com/gin-gonic/gin"
 )
 
@@ -47,6 +51,11 @@ func main() {
 	songHandler := handlers.NewSongHandler(songRepo)
 	queueHandler := handlers.NewQueueHandler(queueRepo, broadcaster)
 	progressHandler := handlers.NewProgressHandler(broadcaster, queueRepo)
+
+	// Create and start queue worker
+	queueWorker := worker.NewWorker(queueRepo, songRepo, broadcaster, 5*time.Second)
+	go queueWorker.Start()
+	log.Println("Queue worker started (polling every 5 seconds)")
 
 	// Create Gin router
 	if cfg.Environment == "production" {
@@ -111,10 +120,28 @@ func main() {
 		}
 	}
 
-	// Start server
+	// Start server in goroutine
 	addr := fmt.Sprintf(":%d", cfg.ServerPort)
 	log.Printf("Starting server on %s", addr)
-	if err := router.Run(addr); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
-	}
+
+	go func() {
+		if err := router.Run(addr); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+
+	log.Println("Shutting down gracefully...")
+
+	// Stop worker
+	queueWorker.Stop()
+
+	// Close database
+	database.Close()
+
+	log.Println("Shutdown complete")
 }
