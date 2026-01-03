@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/audio"
+	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/lyrics"
 )
 
 // Processor handles the actual video processing pipeline
@@ -109,13 +111,51 @@ func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) erro
 
 // processLyrics processes and times the lyrics
 func (p *Processor) processLyrics(item *models.QueueItem, song *models.Song) error {
-	p.updateProgress(item, "Processing lyrics", 22, "Parsing lyrics")
-	time.Sleep(300 * time.Millisecond)
+	p.updateProgress(item, "Processing lyrics", 22, "Parsing lyrics structure")
 
-	p.updateProgress(item, "Processing lyrics", 25, "Aligning lyrics with audio")
-	time.Sleep(500 * time.Millisecond)
+	// Parse lyrics to detect sections
+	lyricsData, err := lyrics.ParseLyrics(song.Lyrics)
+	if err != nil {
+		return fmt.Errorf("failed to parse lyrics: %w", err)
+	}
 
-	p.updateProgress(item, "Processing lyrics", 30, "Lyrics processing complete")
+	log.Printf("Parsed lyrics for %s: %s", song.Title, lyricsData.GetSectionSummary())
+
+	p.updateProgress(item, "Processing lyrics", 25, "Aligning lyrics with audio timing")
+
+	// We need beat times from the audio analysis
+	// For now, we'll use a simplified alignment
+	// In production, this would use the beat_times from audio analysis
+	beatTimes := []float64{} // Will be populated from audio analysis in future
+
+	timedLines, err := lyrics.AlignLyricsToBeats(song.Lyrics, beatTimes, song.DurationSeconds)
+	if err != nil {
+		return fmt.Errorf("failed to align lyrics: %w", err)
+	}
+
+	log.Printf("Aligned %d lyrics lines to audio timing", len(timedLines))
+
+	// Store processed lyrics data
+	sectionsJSON, err := json.Marshal(lyricsData.Sections)
+	if err != nil {
+		log.Printf("Warning: failed to marshal sections: %v", err)
+	} else {
+		song.LyricsSections = string(sectionsJSON)
+	}
+
+	timedLinesJSON, err := json.Marshal(timedLines)
+	if err != nil {
+		log.Printf("Warning: failed to marshal timed lines: %v", err)
+	} else {
+		song.LyricsDisplay = string(timedLinesJSON)
+	}
+
+	// Save updated song data
+	if err := p.songRepo.Update(song); err != nil {
+		log.Printf("Warning: failed to save lyrics processing results: %v", err)
+	}
+
+	p.updateProgress(item, "Processing lyrics", 30, fmt.Sprintf("Processed %d sections, %d lines", len(lyricsData.Sections), len(timedLines)))
 
 	log.Printf("Lyrics processing complete for song: %s", song.Title)
 	return nil

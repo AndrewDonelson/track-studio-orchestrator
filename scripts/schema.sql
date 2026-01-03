@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS songs (
     spectrum_color TEXT DEFAULT 'rainbow',
     spectrum_opacity REAL DEFAULT 0.25,
     target_resolution TEXT DEFAULT '4k',
+    show_metadata BOOLEAN DEFAULT 1,  -- Show BPM, Key, Tempo at top
     
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

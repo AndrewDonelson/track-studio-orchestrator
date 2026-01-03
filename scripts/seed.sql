@@ -26,15 +26,21 @@ INSERT INTO songs (
     target_resolution
 ) VALUES (
     1,
-    'Test Song',
+    'Land of Love',
     'Tristan Hart',
     'Electronic',
-    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-song.mp3',
-    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-song.mp3',
-    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-song.mp3',
-    'This is a test song
-With multiple lines
-For testing purposes',
+    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-files/Land of Love (Cover Hung) (Vocals).wav',
+    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-files/Land of Love (Cover Hung) (Instrumental).wav',
+    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-files/Land of Love (Cover Hung) (Vocals).wav',
+    'In the land of love
+Where hearts collide
+We dance together
+Side by side
+
+Through the night we fly
+Underneath the stars
+In this land of love
+Forever ours',
     120.0,
     180.0,
     'cinematic',

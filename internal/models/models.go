@@ -59,6 +59,7 @@ type Song struct {
 	SpectrumColor    string  `json:"spectrum_color" db:"spectrum_color"`
 	SpectrumOpacity  float64 `json:"spectrum_opacity" db:"spectrum_opacity"`
 	TargetResolution string  `json:"target_resolution" db:"target_resolution"`
+	ShowMetadata     bool    `json:"show_metadata" db:"show_metadata"`
 }
 
 // QueueItem represents a job in the processing queue
