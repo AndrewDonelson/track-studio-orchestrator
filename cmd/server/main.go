@@ -8,6 +8,7 @@ import (
 
 	"github.com/AndrewDonelson/track-studio-orchestrator/config"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/handlers"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,6 +35,14 @@ func main() {
 		}
 	}
 
+	// Create repositories
+	songRepo := database.NewSongRepository(database.DB)
+	queueRepo := database.NewQueueRepository(database.DB)
+
+	// Create handlers
+	songHandler := handlers.NewSongHandler(songRepo)
+	queueHandler := handlers.NewQueueHandler(queueRepo)
+
 	// Create Gin router
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -55,36 +64,37 @@ func main() {
 		// Songs endpoints
 		songs := v1.Group("/songs")
 		{
-			songs.GET("", getSongs)
-			songs.GET("/:id", getSong)
-			songs.POST("", createSong)
-			songs.PUT("/:id", updateSong)
-			songs.DELETE("/:id", deleteSong)
+			songs.GET("", songHandler.GetAll)
+			songs.GET("/:id", songHandler.GetByID)
+			songs.POST("", songHandler.Create)
+			songs.PUT("/:id", songHandler.Update)
+			songs.DELETE("/:id", songHandler.Delete)
 		}
 
 		// Queue endpoints
 		queue := v1.Group("/queue")
 		{
-			queue.GET("", getQueue)
-			queue.POST("", addToQueue)
-			queue.GET("/:id", getQueueItem)
-			queue.PUT("/:id", updateQueueItem)
+			queue.GET("", queueHandler.GetAll)
+			queue.POST("", queueHandler.Create)
+			queue.GET("/next", queueHandler.GetNext)
+			queue.GET("/:id", queueHandler.GetByID)
+			queue.PUT("/:id", queueHandler.Update)
 		}
 
-		// Albums endpoints
+		// Albums endpoints (placeholder)
 		albums := v1.Group("/albums")
 		{
-			albums.GET("", getAlbums)
-			albums.GET("/:id", getAlbum)
-			albums.POST("", createAlbum)
+			albums.GET("", func(c *gin.Context) {
+				c.JSON(200, gin.H{"albums": []interface{}{}})
+			})
 		}
 
-		// Artists endpoints
+		// Artists endpoints (placeholder)
 		artists := v1.Group("/artists")
 		{
-			artists.GET("", getArtists)
-			artists.GET("/:id", getArtist)
-			artists.POST("", createArtist)
+			artists.GET("", func(c *gin.Context) {
+				c.JSON(200, gin.H{"artists": []interface{}{}})
+			})
 		}
 	}
 
@@ -94,65 +104,4 @@ func main() {
 	if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
-}
-
-// Placeholder handlers - to be implemented
-func getSongs(c *gin.Context) {
-	c.JSON(200, gin.H{"songs": []interface{}{}})
-}
-
-func getSong(c *gin.Context) {
-	c.JSON(200, gin.H{"song": nil})
-}
-
-func createSong(c *gin.Context) {
-	c.JSON(201, gin.H{"created": true})
-}
-
-func updateSong(c *gin.Context) {
-	c.JSON(200, gin.H{"updated": true})
-}
-
-func deleteSong(c *gin.Context) {
-	c.JSON(200, gin.H{"deleted": true})
-}
-
-func getQueue(c *gin.Context) {
-	c.JSON(200, gin.H{"queue": []interface{}{}})
-}
-
-func addToQueue(c *gin.Context) {
-	c.JSON(201, gin.H{"queued": true})
-}
-
-func getQueueItem(c *gin.Context) {
-	c.JSON(200, gin.H{"item": nil})
-}
-
-func updateQueueItem(c *gin.Context) {
-	c.JSON(200, gin.H{"updated": true})
-}
-
-func getAlbums(c *gin.Context) {
-	c.JSON(200, gin.H{"albums": []interface{}{}})
-}
-
-func getAlbum(c *gin.Context) {
-	c.JSON(200, gin.H{"album": nil})
-}
-
-func createAlbum(c *gin.Context) {
-	c.JSON(201, gin.H{"created": true})
-}
-
-func getArtists(c *gin.Context) {
-	c.JSON(200, gin.H{"artists": []interface{}{}})
-}
-
-func getArtist(c *gin.Context) {
-	c.JSON(200, gin.H{"artist": nil})
-}
-
-func createArtist(c *gin.Context) {
-	c.JSON(201, gin.H{"created": true})
 }
