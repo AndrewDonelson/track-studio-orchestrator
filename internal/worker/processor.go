@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/audio"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/image"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/lyrics"
+	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/video"
 )
 
 // Processor handles the actual video processing pipeline
@@ -97,8 +99,14 @@ func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) erro
 
 	// Store vocal timing as JSON string
 	if len(analysis.VocalSegments) > 0 {
-		// For now, we'll just store the count and log details
-		log.Printf("Detected %d vocal segments in %s", analysis.VocalSegmentCount, song.Title)
+		vocalTimingJSON, err := json.Marshal(analysis.VocalSegments)
+		if err != nil {
+			log.Printf("Warning: failed to marshal vocal segments: %v", err)
+		} else {
+			song.VocalTiming = string(vocalTimingJSON)
+		}
+		log.Printf("Detected %d vocal segments in %s (first vocal at %.2fs)",
+			analysis.VocalSegmentCount, song.Title, analysis.VocalSegments[0].Start)
 		log.Printf("Audio Analysis: %s", analysis.Summary())
 	}
 
@@ -270,30 +278,253 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 // renderVideo renders the final video
 func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error {
 	p.updateProgress(item, "Rendering video", 55, "Preparing video assets")
-	time.Sleep(500 * time.Millisecond)
 
-	p.updateProgress(item, "Rendering video", 60, "Creating video timeline")
-	time.Sleep(500 * time.Millisecond)
+	// Get executable directory for absolute paths
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+	execDir := filepath.Dir(execPath)
 
-	p.updateProgress(item, "Rendering video", 70, "Adding audio waveform")
-	time.Sleep(800 * time.Millisecond)
+	// Setup paths
+	outputDir := filepath.Join(execDir, "storage", "videos")
+	videoPath := filepath.Join(outputDir, fmt.Sprintf("%s.mp4",
+		strings.ReplaceAll(song.Title, " ", "_")))
 
-	p.updateProgress(item, "Rendering video", 75, "Overlaying lyrics")
-	time.Sleep(800 * time.Millisecond)
+	// Get audio path - need to mix vocals and instrumental
+	audioPath := ""
+	if song.VocalsStemPath != "" && song.MusicStemPath != "" {
+		// Mix vocals and instrumental together
+		mixedPath := filepath.Join(execDir, "storage", "temp", fmt.Sprintf("mixed_%d.wav", song.ID))
+		if err := p.mixAudioTracks(song.VocalsStemPath, song.MusicStemPath, mixedPath); err != nil {
+			log.Printf("Warning: failed to mix audio tracks: %v, using vocals only", err)
+			audioPath = song.VocalsStemPath
+		} else {
+			audioPath = mixedPath
+			defer os.Remove(mixedPath)
+		}
+	} else if song.MixedAudioPath != "" && song.MixedAudioPath != song.VocalsStemPath {
+		// Use pre-mixed audio if it's not the same as vocals
+		audioPath = song.MixedAudioPath
+	} else if song.VocalsStemPath != "" {
+		audioPath = song.VocalsStemPath
+	}
 
-	p.updateProgress(item, "Rendering video", 80, "Adding branding")
-	time.Sleep(500 * time.Millisecond)
+	if audioPath == "" {
+		return fmt.Errorf("no audio file available")
+	}
 
-	p.updateProgress(item, "Rendering video", 85, "Encoding final video")
-	time.Sleep(1 * time.Second)
+	p.updateProgress(item, "Rendering video", 60, "Loading lyrics and images")
+
+	// Parse lyrics data from stored JSON fields
+	var lyricsData lyrics.LyricsData
+	lyricsData.RawLyrics = song.Lyrics
+
+	// Parse sections from LyricsSections
+	if song.LyricsSections != "" {
+		var sections []lyrics.Section
+		if err := json.Unmarshal([]byte(song.LyricsSections), &sections); err != nil {
+			return fmt.Errorf("failed to parse lyrics sections: %w", err)
+		}
+		lyricsData.Sections = sections
+	}
+
+	// Parse timed lines from LyricsDisplay
+	if song.LyricsDisplay != "" {
+		var timedLines []lyrics.TimedLine
+		if err := json.Unmarshal([]byte(song.LyricsDisplay), &timedLines); err != nil {
+			return fmt.Errorf("failed to parse timed lines: %w", err)
+		}
+		lyricsData.TimedLines = timedLines
+	}
+
+	// Build image segments from sections
+	imageDir := filepath.Join(execDir, "storage", "images", fmt.Sprintf("song_%d", song.ID))
+	imageSegments, err := p.buildImageSegments(&lyricsData, imageDir, song.DurationSeconds)
+	if err != nil {
+		return fmt.Errorf("failed to build image segments: %w", err)
+	}
+
+	// Build timed lyrics from TimedLines
+	timedLyrics := p.buildTimedLyrics(&lyricsData)
+
+	// Get vocal onset time from database
+	vocalOnset := 0.0
+	if song.VocalTiming != "" {
+		var vocalSegments []audio.VocalSegment
+		if err := json.Unmarshal([]byte(song.VocalTiming), &vocalSegments); err == nil {
+			if len(vocalSegments) > 0 {
+				vocalOnset = vocalSegments[0].Start
+				log.Printf("Applying vocal onset offset: %.2fs", vocalOnset)
+			}
+		}
+	}
+
+	p.updateProgress(item, "Rendering video", 70, "Composing video with FFmpeg")
+
+	// Create video renderer
+	renderer := video.NewVideoRenderer(outputDir)
+
+	// Prepare render options
+	opts := &video.VideoRenderOptions{
+		AudioPath:         audioPath,
+		Duration:          song.DurationSeconds,
+		ImagePaths:        imageSegments,
+		LyricsData:        timedLyrics,
+		VocalOnset:        vocalOnset,
+		CrossfadeDuration: 2.0, // 2 second crossfade between images
+		Key:               song.Key,
+		Tempo:             song.Tempo,
+		BPM:               song.BPM,
+		Title:             song.Title,
+		Artist:            song.ArtistName,
+		OutputPath:        videoPath,
+	}
+
+	p.updateProgress(item, "Rendering video", 75, "Rendering video (this may take a few minutes)")
+
+	// Render the video
+	finalPath, err := renderer.RenderVideo(opts)
+	if err != nil {
+		return fmt.Errorf("video rendering failed: %w", err)
+	}
 
 	p.updateProgress(item, "Rendering video", 90, "Video rendering complete")
 
-	// Store video path
-	item.VideoFilePath = fmt.Sprintf("storage/videos/%s_%d.mp4", song.Title, item.ID)
-	item.VideoFileSize = 125000000 // 125MB placeholder
+	// Get file size
+	fileInfo, err := os.Stat(finalPath)
+	if err != nil {
+		log.Printf("Warning: could not get video file size: %v", err)
+	} else {
+		item.VideoFileSize = fileInfo.Size()
+	}
 
-	log.Printf("Video rendering complete for song: %s", song.Title)
+	// Store video path
+	item.VideoFilePath = finalPath
+
+	log.Printf("Video rendering complete for song: %s - Output: %s (%.2f MB)",
+		song.Title, finalPath, float64(item.VideoFileSize)/(1024*1024))
+	return nil
+}
+
+// buildImageSegments creates timed image segments from lyrics sections
+func (p *Processor) buildImageSegments(lyricsData *lyrics.LyricsData, imageDir string, totalDuration float64) ([]video.ImageSegment, error) {
+	var segments []video.ImageSegment
+
+	// Build timing map from timed lines
+	lineTimings := make(map[int]*lyrics.TimedLine) // line index -> timing
+	for i := range lyricsData.TimedLines {
+		lineTimings[i] = &lyricsData.TimedLines[i]
+	}
+
+	for _, section := range lyricsData.Sections {
+		var imageName string
+		switch section.Type {
+		case "verse":
+			imageName = fmt.Sprintf("bg-verse-%d.png", section.Number)
+		case "pre-chorus":
+			imageName = "bg-prechorus.png"
+		case "chorus":
+			imageName = "bg-chorus.png"
+		case "bridge":
+			imageName = "bg-bridge.png"
+		case "intro":
+			imageName = "bg-intro.png"
+		case "outro":
+			imageName = "bg-outro.png"
+		default:
+			imageName = fmt.Sprintf("bg-%s.png", section.Type)
+		}
+
+		imagePath := filepath.Join(imageDir, imageName)
+
+		// Check if image exists
+		if _, err := os.Stat(imagePath); err != nil {
+			log.Printf("Warning: image not found: %s", imagePath)
+			continue
+		}
+
+		// Calculate timing from section lines
+		startTime := totalDuration
+		endTime := 0.0
+
+		// Use section line range to find timings
+		for i := section.StartLine; i <= section.EndLine && i < len(lyricsData.TimedLines); i++ {
+			timing := &lyricsData.TimedLines[i]
+			if timing.StartTime < startTime {
+				startTime = timing.StartTime
+			}
+			if timing.EndTime > endTime {
+				endTime = timing.EndTime
+			}
+		}
+
+		// Ensure valid timing
+		if startTime >= totalDuration || endTime <= 0 {
+			// Use section position as fallback
+			startTime = float64(section.StartLine) * 3.0 // ~3 seconds per line
+			endTime = float64(section.EndLine+1) * 3.0
+		}
+
+		if startTime >= endTime {
+			endTime = startTime + 10.0 // default 10 seconds
+		}
+
+		segments = append(segments, video.ImageSegment{
+			ImagePath: imagePath,
+			StartTime: startTime,
+			EndTime:   endTime,
+		})
+	}
+
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("no image segments created")
+	}
+
+	return segments, nil
+}
+
+// buildTimedLyrics converts lyrics TimedLines to video LyricLines
+func (p *Processor) buildTimedLyrics(lyricsData *lyrics.LyricsData) []video.LyricLine {
+	var timedLyrics []video.LyricLine
+
+	for _, tl := range lyricsData.TimedLines {
+		if strings.TrimSpace(tl.Line) == "" {
+			continue
+		}
+
+		timedLyrics = append(timedLyrics, video.LyricLine{
+			Text:      tl.Line,
+			StartTime: tl.StartTime,
+			EndTime:   tl.EndTime,
+		})
+	}
+
+	return timedLyrics
+}
+
+// mixAudioTracks mixes vocals and instrumental tracks together
+func (p *Processor) mixAudioTracks(vocalsPath, instrumentalPath, outputPath string) error {
+	// Ensure output directory exists
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Use FFmpeg to mix the two audio tracks
+	cmd := exec.Command("ffmpeg",
+		"-i", vocalsPath,
+		"-i", instrumentalPath,
+		"-filter_complex", "[0:a][1:a]amix=inputs=2:duration=longest:weights=1.0 1.0",
+		"-c:a", "pcm_s16le",
+		"-y",
+		outputPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg mix failed: %w\nOutput: %s", err, string(output))
+	}
+
 	return nil
 }
 
