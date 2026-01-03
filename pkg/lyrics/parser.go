@@ -72,6 +72,7 @@ func detectSections(lines []string) []Section {
 	// Patterns for explicit section markers
 	versePattern := regexp.MustCompile(`(?i)^\[?verse\s*(\d+)?\]?$`)
 	chorusPattern := regexp.MustCompile(`(?i)^\[?chorus\]?$`)
+	preChorusPattern := regexp.MustCompile(`(?i)^\[?pre-?chorus\]?$`)
 	bridgePattern := regexp.MustCompile(`(?i)^\[?bridge\]?$`)
 	introPattern := regexp.MustCompile(`(?i)^\[?intro\]?$`)
 	outroPattern := regexp.MustCompile(`(?i)^\[?outro\]?$`)
@@ -119,6 +120,21 @@ func detectSections(lines []string) []Section {
 			currentSection = Section{
 				Type:      "chorus",
 				Number:    chorusCount,
+				StartLine: i + 1,
+				Lines:     []string{},
+			}
+			inSection = true
+			continue
+		}
+
+		if preChorusPattern.MatchString(line) {
+			if inSection {
+				currentSection.EndLine = i - 1
+				sections = append(sections, currentSection)
+			}
+			currentSection = Section{
+				Type:      "pre-chorus",
+				Number:    1,
 				StartLine: i + 1,
 				Lines:     []string{},
 			}
