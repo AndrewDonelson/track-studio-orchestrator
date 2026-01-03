@@ -1,5 +1,6 @@
 # Binaries
 bin/
+tmp/
 *.exe
 *.exe~
 *.dll
@@ -11,16 +12,18 @@ bin/
 
 # Output of the go coverage tool
 *.out
+coverage.out
+
+# Build artifacts
+build-errors.log
 
 # Data files
-data/*.db
-data/*.db-*
+data/
+*.db
+*.db-*
 
 # Storage
-storage/songs/*
-storage/videos/*
-storage/temp/*
-!storage/*/.gitkeep
+storage/
 
 # IDE
 .vscode/
