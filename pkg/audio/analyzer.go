@@ -3,6 +3,7 @@ package audio
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 )
@@ -35,11 +36,13 @@ type VocalSegment struct {
 // AnalyzeAudio analyzes an audio file using the Python librosa script
 func AnalyzeAudio(audioPath string) (*AudioAnalysis, error) {
 	// Get absolute path to analyzer script
-	// Assumes it's in pkg/audio/analyzer.py relative to project root
-	scriptPath, err := filepath.Abs("pkg/audio/analyzer.py")
+	// Assumes it's in pkg/audio/analyzer.py relative to binary location
+	execPath, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve analyzer script path: %w", err)
+		return nil, fmt.Errorf("failed to get executable path: %w", err)
 	}
+	execDir := filepath.Dir(execPath)
+	scriptPath := filepath.Join(execDir, "pkg", "audio", "analyzer.py")
 
 	// Execute Python script
 	cmd := exec.Command("python3", scriptPath, audioPath)

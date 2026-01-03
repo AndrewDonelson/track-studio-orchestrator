@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/audio"
+	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/image"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/lyrics"
 )
 
@@ -161,20 +165,105 @@ func (p *Processor) processLyrics(item *models.QueueItem, song *models.Song) err
 	return nil
 }
 
-// generateImages generates background images via CQAI
+// generateImages generates background images via CQAI for each unique section
 func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) error {
-	imageCount := 5 // Generate 5 background images
+	p.updateProgress(item, "Generating images", 34, "Parsing lyrics sections")
 
-	for i := 1; i <= imageCount; i++ {
-		progress := 30 + (i * 4) // 30-50%
-		message := fmt.Sprintf("Generating image %d of %d", i, imageCount)
-		p.updateProgress(item, "Generating images", progress, message)
-		time.Sleep(1 * time.Second) // Simulate CQAI API call
+	// Parse lyrics to get sections
+	lyricsData, err := lyrics.ParseLyrics(song.Lyrics)
+	if err != nil {
+		return fmt.Errorf("failed to parse lyrics for images: %w", err)
 	}
 
-	p.updateProgress(item, "Generating images", 50, "All images generated")
+	if len(lyricsData.Sections) == 0 {
+		log.Printf("No sections found, skipping image generation")
+		return nil
+	}
 
-	log.Printf("Image generation complete for song: %s", song.Title)
+	// Create image generator with absolute path
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+	execDir := filepath.Dir(execPath)
+	outputDir := filepath.Join(execDir, "storage", "images", fmt.Sprintf("song_%d", song.ID))
+	imageGen := image.NewImageGenerator(outputDir)
+
+	// Build style keywords from genre and background style
+	styleKeywords := image.BuildStyleKeywords(song.Genre, song.BackgroundStyle)
+	log.Printf("Style keywords for %s: %s", song.Title, styleKeywords)
+
+	// Track unique images generated
+	generatedImages := make(map[string]string) // filename -> path
+	var imagePaths []string
+
+	totalSections := len(lyricsData.Sections)
+	for i, section := range lyricsData.Sections {
+		// Calculate progress (34% to 50%)
+		progress := 34 + ((i+1)*16)/totalSections
+
+		// Determine if we need to generate this image
+		var filename string
+		switch section.Type {
+		case "verse":
+			filename = fmt.Sprintf("bg-verse-%d.png", section.Number)
+		case "pre-chorus":
+			filename = "bg-prechorus.png"
+		case "chorus":
+			filename = "bg-chorus.png"
+		case "bridge":
+			filename = "bg-bridge.png"
+		case "intro":
+			filename = "bg-intro.png"
+		case "outro":
+			filename = "bg-outro.png"
+		default:
+			filename = fmt.Sprintf("bg-%s-%d.png", section.Type, section.Number)
+		}
+
+		// Check if already generated (for repeated choruses/pre-choruses)
+		if existingPath, exists := generatedImages[filename]; exists {
+			log.Printf("Reusing existing image for %s %d: %s", section.Type, section.Number, filename)
+			imagePaths = append(imagePaths, existingPath)
+			continue
+		}
+
+		// Prepare lyrics content
+		sectionLyrics := strings.Join(section.Lines, "\n")
+
+		message := fmt.Sprintf("Generating image for %s %d (%s)",
+			section.Type, section.Number, filename)
+		p.updateProgress(item, "Generating images", progress, message)
+
+		// Generate image
+		log.Printf("Generating image for %s %d: %s", section.Type, section.Number, filename)
+		imagePath, err := imageGen.GenerateFromSection(
+			section.Type,
+			section.Number,
+			sectionLyrics,
+			styleKeywords,
+		)
+		if err != nil {
+			log.Printf("Warning: failed to generate image for %s %d: %v",
+				section.Type, section.Number, err)
+			// Continue with other images
+			continue
+		}
+
+		generatedImages[filename] = imagePath
+		imagePaths = append(imagePaths, imagePath)
+		log.Printf("Generated image %d/%d: %s", len(generatedImages), totalSections, imagePath)
+	}
+
+	p.updateProgress(item, "Generating images", 50,
+		fmt.Sprintf("Generated %d unique images from %d sections",
+			len(generatedImages), totalSections))
+
+	log.Printf("Image generation complete for song: %s - Generated %d unique images",
+		song.Title, len(generatedImages))
+
+	// TODO: Store image paths in database (new field: image_paths JSON)
+
 	return nil
 }
 
