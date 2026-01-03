@@ -297,8 +297,8 @@ func (vr *VideoRenderer) addBrandingOverlays(inputPath string, opts *VideoRender
 	var filterParts []string
 
 	// Song title - bottom left (Saira Condensed 64, white with shadow)
-	// Position: 40px from left, 40px from bottom
-	titleFilter := fmt.Sprintf("drawtext=text='%s':x=40:y=h-80:fontsize=64:fontcolor=white:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black:shadowx=2:shadowy=2",
+	// Position: 40px from left, 52px from bottom (raised 12px)
+	titleFilter := fmt.Sprintf("drawtext=text='%s':x=40:y=h-92:fontsize=64:fontcolor=white:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black:shadowx=2:shadowy=2",
 		escapeText(opts.Title))
 	filterParts = append(filterParts, titleFilter)
 
@@ -334,7 +334,7 @@ func (vr *VideoRenderer) addBrandingOverlays(inputPath string, opts *VideoRender
 	return tempPath, nil
 }
 
-// addLyricsOverlay adds timed lyrics with karaoke-style highlighting to the center of video
+// addLyricsOverlay adds word-by-word karaoke lyrics with preview line
 func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOptions) (string, error) {
 	tempPath := filepath.Join(vr.TempDir, "with_lyrics.mp4")
 
@@ -349,80 +349,93 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 		vocalOnset = 0
 	}
 
-	log.Printf("Applying vocal onset offset of %.2fs to %d lyric lines", vocalOnset, len(opts.LyricsData))
+	log.Printf("Building word-by-word karaoke for %d lyric lines", len(opts.LyricsData))
 
-	// Build drawtext filters for each lyric line with timing and karaoke effect
-	// Process each line individually to avoid escaping issues
+	// Build comprehensive filter with all lyrics rendered together
 	centerY := vr.Height / 2
+	previewY := centerY + 80 // Preview line below active line
 
-	currentInput := inputPath
+	var filterParts []string
 
 	for i, lyric := range opts.LyricsData {
-		var nextPath string
-		if i == len(opts.LyricsData)-1 {
-			nextPath = tempPath
-		} else {
-			nextPath = filepath.Join(vr.TempDir, fmt.Sprintf("lyrics_step_%d.mp4", i))
-		}
-
-		// Apply vocal onset offset with timing adjustment
 		startTime := lyric.StartTime + vocalOnset + TimingAdjustment
 		endTime := lyric.EndTime + vocalOnset + TimingAdjustment
 		duration := endTime - startTime
 
-		// Write text to a temporary file to avoid escaping issues
-		textFile := filepath.Join(vr.TempDir, fmt.Sprintf("lyric_%d.txt", i))
-		if err := os.WriteFile(textFile, []byte(lyric.Text), 0644); err != nil {
-			return "", fmt.Errorf("failed to write lyric text file: %w", err)
-		}
-		defer os.Remove(textFile)
-
-		// Build karaoke-style filter with color transition effect
-		// Since FFmpeg doesn't support dynamic color expressions in drawtext,
-		// we'll use two text layers: white base + yellow overlay with alpha fade
-		enableStr := fmt.Sprintf("between(t,%.2f,%.2f)", startTime, endTime)
-
-		// Calculate alpha transition for the yellow overlay (0 to 1 over duration)
-		// This creates a fade-in effect for the yellow color over the white base
-		alphaTransition := fmt.Sprintf("if(lt(t,%.2f),0,if(gt(t,%.2f),1,min(1,(t-%.2f)/%.2f)))",
-			startTime, endTime, startTime, duration)
-
-		// Layer 1: White text with shadow (base layer, always visible)
-		baseFilter := fmt.Sprintf("drawtext=textfile='%s':x=(w-text_w)/2:y=%d:fontsize=52:fontcolor=white:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:shadowcolor=black:shadowx=3:shadowy=3:enable='%s'",
-			textFile, centerY, enableStr)
-
-		// Layer 2: Yellow overlay that fades in over time (karaoke effect)
-		karaokeFilter := fmt.Sprintf(",drawtext=textfile='%s':x=(w-text_w)/2:y=%d:fontsize=52:fontcolor=yellow:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:enable='%s':alpha='%s'",
-			textFile, centerY, enableStr, alphaTransition)
-
-		filterStr := baseFilter + karaokeFilter
-
-		cmd := exec.Command("ffmpeg",
-			"-i", currentInput,
-			"-vf", filterStr,
-			"-c:v", "libx264",
-			"-preset", "ultrafast",
-			"-crf", "23",
-			"-c:a", "copy",
-			"-y",
-			nextPath,
-		)
-
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return "", fmt.Errorf("ffmpeg lyrics overlay failed at line %d ('%s'): %w\nOutput: %s", i, lyric.Text, err, string(output))
+		// Estimate word-level timing by dividing duration evenly
+		words := strings.Fields(lyric.Text)
+		if len(words) == 0 {
+			continue
 		}
 
-		// Clean up intermediate file
-		if currentInput != inputPath {
-			os.Remove(currentInput)
+		wordDuration := duration / float64(len(words))
+
+		// Current line - white base text (100% opacity, full duration)
+		baseFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=52:fontcolor=white:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:shadowcolor=black@0.8:shadowx=3:shadowy=3:enable=between(t\\,%.2f\\,%.2f)",
+			escapeText(lyric.Text), centerY, startTime, endTime)
+		filterParts = append(filterParts, baseFilter)
+
+		// Word-by-word yellow highlight
+		for wordIdx, word := range words {
+			wordStartTime := startTime + float64(wordIdx)*wordDuration
+			wordEndTime := wordStartTime + wordDuration
+
+			// Calculate cumulative text to determine position
+			preText := strings.Join(words[:wordIdx], " ")
+			if preText != "" {
+				preText += " "
+			}
+
+			wordHighlight := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=52:fontcolor=yellow:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:enable=between(t\\,%.2f\\,%.2f)",
+				escapeText(preText+word), centerY, wordStartTime, wordEndTime)
+			filterParts = append(filterParts, wordHighlight)
 		}
 
-		currentInput = nextPath
+		// Preview line (next line at 50% opacity)
+		if i < len(opts.LyricsData)-1 {
+			nextLyric := opts.LyricsData[i+1]
+			escapedNextText := escapeText(nextLyric.Text)
+			previewFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=44:fontcolor=white@0.5:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:enable=between(t\\,%.2f\\,%.2f)",
+				escapedNextText, previewY, startTime, endTime)
+			filterParts = append(filterParts, previewFilter)
+		}
+	}
+
+	// Add progress indicator for intro (non-vocal sections)
+	if vocalOnset > 2.0 {
+		progressBarY := centerY - 50
+		progressWidth := 600
+		progressFilter := fmt.Sprintf("drawbox=x=(w-%d)/2:y=%d:w=%d*min(1\\,t/%.2f):h=4:color=yellow@0.8:enable=lt(t\\,%.2f)",
+			progressWidth, progressBarY, progressWidth, vocalOnset+TimingAdjustment, vocalOnset+TimingAdjustment)
+		filterParts = append(filterParts, progressFilter)
+
+		countdownFilter := fmt.Sprintf("drawtext=text='Starting in %%{eif\\:max(0\\,%.2f-t)\\:d}s':x=(w-text_w)/2:y=%d:fontsize=32:fontcolor=white@0.7:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:enable=lt(t\\,%.2f)",
+			vocalOnset+TimingAdjustment, progressBarY-40, vocalOnset+TimingAdjustment)
+		filterParts = append(filterParts, countdownFilter)
+	}
+
+	filterStr := strings.Join(filterParts, ",")
+
+	cmd := exec.Command("ffmpeg",
+		"-i", inputPath,
+		"-vf", filterStr,
+		"-c:v", "libx264",
+		"-preset", "medium",
+		"-crf", "23",
+		"-c:a", "copy",
+		"-y",
+		tempPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg lyrics overlay failed: %w\nOutput: %s", err, string(output))
 	}
 
 	return tempPath, nil
-} // addAudio adds audio to the video
+}
+
+// addAudio adds audio to the video
 func (vr *VideoRenderer) addAudio(videoPath, audioPath string, duration float64) (string, error) {
 	tempPath := filepath.Join(vr.TempDir, "with_audio.mp4")
 
@@ -507,9 +520,29 @@ func (vr *VideoRenderer) GetAverageRenderTime() time.Duration {
 	return total / time.Duration(len(vr.RenderTimings))
 }
 
+// sanitizeText removes problematic characters that cause FFmpeg issues
+// Keeps: letters, numbers, spaces, comma, period, question mark, exclamation, dash, parentheses
+func sanitizeText(text string) string {
+	var result strings.Builder
+	for _, r := range text {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z': // letters
+			result.WriteRune(r)
+		case r >= '0' && r <= '9': // numbers
+			result.WriteRune(r)
+		case r == ' ', r == ',', r == '.', r == '?', r == '!', r == '-', r == '(', r == ')':
+			result.WriteRune(r)
+			// Skip all other characters including quotes, apostrophes, colons, semicolons, etc.
+		}
+	}
+	return result.String()
+}
+
 // escapeText escapes special characters for FFmpeg drawtext filter
 func escapeText(text string) string {
-	// Escape single quotes, colons, and backslashes for FFmpeg
+	// First sanitize to remove problematic characters
+	text = sanitizeText(text)
+	// Then escape remaining special chars for FFmpeg
 	text = strings.ReplaceAll(text, "\\", "\\\\")
 	text = strings.ReplaceAll(text, "'", "\\'")
 	text = strings.ReplaceAll(text, ":", "\\:")
