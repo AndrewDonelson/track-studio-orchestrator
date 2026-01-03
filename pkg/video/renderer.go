@@ -98,43 +98,22 @@ func (vr *VideoRenderer) RenderVideo(opts *VideoRenderOptions) (string, error) {
 		return "", fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	log.Println("Step 1/5: Creating image slideshow...")
-	slideshowPath, err := vr.createImageSlideshow(opts)
+	log.Println("Step 1/3: Creating image slideshow with metadata and branding...")
+	basePath, err := vr.createBasicVideo(opts)
 	if err != nil {
-		return "", fmt.Errorf("failed to create slideshow: %w", err)
+		return "", fmt.Errorf("failed to create basic video: %w", err)
 	}
-	defer os.Remove(slideshowPath)
+	defer os.Remove(basePath)
 
-	log.Println("Step 2/5: Adding metadata overlay...")
-	metadataPath, err := vr.addMetadataOverlay(slideshowPath, opts)
-	if err != nil {
-		return "", fmt.Errorf("failed to add metadata: %w", err)
-	}
-	defer os.Remove(metadataPath)
-
-	log.Println("Step 2.5/5: Adding branding overlays...")
-	brandingPath, err := vr.addBrandingOverlays(metadataPath, opts)
-	if err != nil {
-		return "", fmt.Errorf("failed to add branding: %w", err)
-	}
-	defer os.Remove(brandingPath)
-
-	log.Println("Step 3/5: Adding lyrics overlay...")
-	lyricsPath, err := vr.addLyricsOverlay(brandingPath, opts)
+	log.Println("Step 2/3: Adding lyrics overlay...")
+	lyricsPath, err := vr.addLyricsOverlay(basePath, opts)
 	if err != nil {
 		return "", fmt.Errorf("failed to add lyrics: %w", err)
 	}
 	defer os.Remove(lyricsPath)
 
-	log.Println("Step 4/5: Adding audio...")
-	audioPath, err := vr.addAudio(lyricsPath, opts.AudioPath, opts.Duration)
-	if err != nil {
-		return "", fmt.Errorf("failed to add audio: %w", err)
-	}
-	defer os.Remove(audioPath)
-
-	log.Println("Step 5/5: Encoding final video...")
-	finalPath, err := vr.encodeFinalVideo(audioPath, opts.OutputPath)
+	log.Println("Step 3/3: Adding audio and encoding final video...")
+	finalPath, err := vr.addAudioAndEncode(lyricsPath, opts.AudioPath, opts.Duration, opts.OutputPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode final video: %w", err)
 	}
@@ -143,13 +122,110 @@ func (vr *VideoRenderer) RenderVideo(opts *VideoRenderOptions) (string, error) {
 	return finalPath, nil
 }
 
+// createBasicVideo creates slideshow with all static overlays (metadata, title, copyright, logo)
+func (vr *VideoRenderer) createBasicVideo(opts *VideoRenderOptions) (string, error) {
+	tempPath := filepath.Join(vr.TempDir, "base_with_overlays.mp4")
+
+	// Step 1: Create image slideshow
+	slideshowPath := filepath.Join(vr.TempDir, "slideshow.mp4")
+	if err := vr.createImageSlideshow(opts, slideshowPath); err != nil {
+		return "", fmt.Errorf("failed to create slideshow: %w", err)
+	}
+	defer os.Remove(slideshowPath)
+
+	// Step 2: Add all static overlays in one pass
+	// Build comprehensive filter for metadata + branding
+	var filterParts []string
+
+	// Top bar - Yellow/Gold text (Saira Condensed 48pt)
+	// KEY (Top-Left, aligned left, 20px from edges)
+	if opts.Key != "" {
+		keyFilter := fmt.Sprintf("drawtext=text='KEY\\\\: %s':x=20:y=20:fontsize=48:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+			escapeText(opts.Key))
+		filterParts = append(filterParts, keyFilter)
+	}
+
+	// TEMPO (Top-Center, aligned center)
+	if opts.Tempo != "" {
+		tempoFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=20:fontsize=48:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+			escapeText(opts.Tempo))
+		filterParts = append(filterParts, tempoFilter)
+	}
+
+	// BPM (Top-Right, aligned right, 20px from edge)
+	if opts.BPM > 0 {
+		bpmFilter := fmt.Sprintf("drawtext=text='BPM\\\\: %.0f':x=w-text_w-20:y=20:fontsize=48:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+			opts.BPM)
+		filterParts = append(filterParts, bpmFilter)
+	}
+
+	// Bottom bar - Title (yellow/gold), Copyright (white), Logo (image overlay)
+	// Song title - bottom left (Saira Condensed 64, yellow/gold)
+	// Position: 20px from left, 80px from bottom
+	titleFilter := fmt.Sprintf("drawtext=text='%s':x=20:y=h-80:fontsize=64:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+		escapeText(opts.Title))
+	filterParts = append(filterParts, titleFilter)
+
+	// Copyright - bottom center (Roboto 20, white)
+	// Position: centered horizontally, 25px from bottom
+	copyright := "All content Copyright 2017-2026 Nlaak Studios"
+	copyrightFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=h-25:fontsize=20:fontcolor=white:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:shadowcolor=black@0.7:shadowx=1:shadowy=1",
+		escapeText(copyright))
+	filterParts = append(filterParts, copyrightFilter)
+
+	filterStr := strings.Join(filterParts, ",")
+
+	// Check if artist logo exists for overlay
+	logoPath := filepath.Join("storage", "branding", "artist-logo.png")
+	logoExists := false
+	if _, err := os.Stat(logoPath); err == nil {
+		logoExists = true
+	}
+
+	var cmd *exec.Cmd
+	if logoExists {
+		// Use filter_complex to add text overlays + logo overlay (150x150, bottom-right, 20px margins)
+		cmd = exec.Command("ffmpeg",
+			"-i", slideshowPath,
+			"-i", logoPath,
+			"-filter_complex",
+			fmt.Sprintf("[0:v]%s[v1];[1:v]scale=150:150[logo];[v1][logo]overlay=W-w-20:H-h-20[vout]", filterStr),
+			"-map", "[vout]",
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			tempPath,
+		)
+	} else {
+		// No logo, just text overlays
+		cmd = exec.Command("ffmpeg",
+			"-i", slideshowPath,
+			"-vf", filterStr,
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			tempPath,
+		)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg basic video creation failed: %w\nOutput: %s", err, string(output))
+	}
+
+	return tempPath, nil
+}
+
 // createImageSlideshow creates a video from timed image segments with crossfade transitions
-func (vr *VideoRenderer) createImageSlideshow(opts *VideoRenderOptions) (string, error) {
-	tempPath := filepath.Join(vr.TempDir, "slideshow.mp4")
+func (vr *VideoRenderer) createImageSlideshow(opts *VideoRenderOptions, outputPath string) error {
+	tempPath := outputPath
 
 	// If only one image, create a simple static video
 	if len(opts.ImagePaths) == 1 {
-		return vr.createStaticImageVideo(opts.ImagePaths[0].ImagePath, opts.Duration, tempPath)
+		_, err := vr.createStaticImageVideo(opts.ImagePaths[0].ImagePath, opts.Duration, tempPath)
+		return err
 	}
 
 	// Set default crossfade duration
@@ -177,7 +253,7 @@ func (vr *VideoRenderer) createImageSlideshow(opts *VideoRenderOptions) (string,
 		// Create video segment for this image
 		_, err := vr.createStaticImageVideo(seg.ImagePath, duration, segmentPath)
 		if err != nil {
-			return "", fmt.Errorf("failed to create segment %d: %w", i, err)
+			return fmt.Errorf("failed to create segment %d: %w", i, err)
 		}
 		defer os.Remove(segmentPath)
 
@@ -190,7 +266,7 @@ func (vr *VideoRenderer) createImageSlideshow(opts *VideoRenderOptions) (string,
 		cmd := exec.Command("ffmpeg", "-i", segmentPaths[0], "-c", "copy", "-y", tempPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return "", fmt.Errorf("ffmpeg copy failed: %w\nOutput: %s", err, string(output))
+			return fmt.Errorf("ffmpeg copy failed: %w\nOutput: %s", err, string(output))
 		}
 	} else {
 		// Multiple images - apply xfade transitions
@@ -229,11 +305,11 @@ func (vr *VideoRenderer) createImageSlideshow(opts *VideoRenderOptions) (string,
 		cmd := exec.Command("ffmpeg", args...)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return "", fmt.Errorf("ffmpeg xfade failed: %w\nOutput: %s", err, string(output))
+			return fmt.Errorf("ffmpeg xfade failed: %w\nOutput: %s", err, string(output))
 		}
 	}
 
-	return tempPath, nil
+	return nil
 }
 
 // createStaticImageVideo creates a video from a single image with specified duration
@@ -372,79 +448,142 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 		vocalOnset = 0
 	}
 
-	log.Printf("Building word-by-word karaoke for %d lyric lines", len(opts.LyricsData))
+	log.Printf("Building multi-line lyrics display for %d lyric lines", len(opts.LyricsData))
 
-	// Build comprehensive filter with all lyrics rendered together
+	// Break long lyrics into display lines
+	type DisplayLine struct {
+		Text      string
+		StartTime float64
+		EndTime   float64
+		LineIndex int // Which lyric line this came from
+	}
+
+	var displayLines []DisplayLine
+	maxCharsPerLine := 38 // Max characters before breaking (reduced from 45 to prevent clipping)
+
+	for i, lyric := range opts.LyricsData {
+		text := lyric.Text
+		startTime := lyric.StartTime + vocalOnset
+		endTime := lyric.EndTime + vocalOnset
+
+		// Check if line needs breaking
+		if len(text) <= maxCharsPerLine {
+			displayLines = append(displayLines, DisplayLine{
+				Text:      text,
+				StartTime: startTime,
+				EndTime:   endTime,
+				LineIndex: i,
+			})
+		} else {
+			// Try to break at comma if it's in middle 30-70%
+			commaPos := -1
+			for idx, ch := range text {
+				if ch == ',' {
+					percentPos := float64(idx) / float64(len(text))
+					if percentPos >= 0.30 && percentPos <= 0.70 {
+						commaPos = idx
+						break
+					}
+				}
+			}
+
+			duration := endTime - startTime
+			if commaPos > 0 {
+				// Break at comma
+				line1 := strings.TrimSpace(text[:commaPos+1])
+				line2 := strings.TrimSpace(text[commaPos+1:])
+				midTime := startTime + duration*0.5
+
+				displayLines = append(displayLines, DisplayLine{
+					Text:      line1,
+					StartTime: startTime,
+					EndTime:   midTime,
+					LineIndex: i,
+				})
+				displayLines = append(displayLines, DisplayLine{
+					Text:      line2,
+					StartTime: midTime,
+					EndTime:   endTime,
+					LineIndex: i,
+				})
+			} else {
+				// Break at last space before max chars (fixed bounds check)
+				breakPos := -1
+				for idx := min(maxCharsPerLine-1, len(text)-1); idx > 0; idx-- {
+					if text[idx] == ' ' {
+						breakPos = idx
+						break
+					}
+				}
+				if breakPos <= 0 {
+					// Force break at maxCharsPerLine if no space found
+					breakPos = maxCharsPerLine
+				}
+				line1 := strings.TrimSpace(text[:breakPos])
+				line2 := strings.TrimSpace(text[breakPos:])
+				midTime := startTime + duration*0.5
+
+				displayLines = append(displayLines, DisplayLine{
+					Text:      line1,
+					StartTime: startTime,
+					EndTime:   midTime,
+					LineIndex: i,
+				})
+				displayLines = append(displayLines, DisplayLine{
+					Text:      line2,
+					StartTime: midTime,
+					EndTime:   endTime,
+					LineIndex: i,
+				})
+			}
+		}
+	}
+
+	// Build filter for multi-line display with scrolling
+	// Y positions for 4 lines (center screen, avoid top/bottom bars)
 	centerY := vr.Height / 2
-	previewY := centerY + 80 // Preview line below active line
+	lineSpacing := 80
+	line1Y := centerY - lineSpacing   // Active line (100% opacity)
+	line2Y := centerY                 // Next line (50% opacity)
+	line3Y := centerY + lineSpacing   // Future line (30% opacity)
+	line4Y := centerY + lineSpacing*2 // Future line (10% opacity)
 
 	var filterParts []string
 
-	for i, lyric := range opts.LyricsData {
-		// Use accurate timing: vocal onset + lyric times (no manual adjustment)
-		startTime := lyric.StartTime + vocalOnset
-		endTime := lyric.EndTime + vocalOnset
-		duration := endTime - startTime
+	// Render each display line at all 4 positions with appropriate timing and opacity
+	for i, line := range displayLines {
+		escapedText := escapeText(line.Text)
 
-		// Estimate word-level timing by dividing duration evenly
-		words := strings.Fields(lyric.Text)
-		if len(words) == 0 {
-			continue
+		// Position 1: Active line (100% opacity, blue with white border)
+		filter1 := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=64:fontcolor=0x4169E1:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:borderw=3:bordercolor=white:enable=between(t\\,%.2f\\,%.2f)",
+			escapedText, line1Y, line.StartTime, line.EndTime)
+		filterParts = append(filterParts, filter1)
+
+		// Position 2: Next line (50% opacity) - show NEXT line (i+1) while current is active
+		if i < len(displayLines)-1 {
+			nextLine := displayLines[i+1]
+			nextEscapedText := escapeText(nextLine.Text)
+			filter2 := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=64:fontcolor=0x4169E1@0.5:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:borderw=3:bordercolor=white@0.5:enable=between(t\\,%.2f\\,%.2f)",
+				nextEscapedText, line2Y, line.StartTime, line.EndTime)
+			filterParts = append(filterParts, filter2)
 		}
 
-		wordDuration := duration / float64(len(words))
-
-		fullText := escapeText(lyric.Text)
-
-		// SOLUTION: Use expression to calculate fixed X position where centered text starts
-		// Then render both white and yellow left-aligned from that position
-		// Expression: X_start = (width - full_text_width) / 2
-		// In FFmpeg: We render full white centered, then yellow cumulative from same start X
-
-		// Base layer: Full white text, centered by calculating start position
-		// Use x=(w-text_w)/2 which centers the full line
-		baseFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=52:fontcolor=white:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:shadowcolor=black@0.8:shadowx=3:shadowy=3:enable=between(t\\,%.2f\\,%.2f)",
-			fullText, centerY, startTime, endTime)
-		filterParts = append(filterParts, baseFilter)
-
-		// Karaoke highlighting (optional)
-		if opts.EnableKaraoke {
-			// Karaoke layer: Build cumulative yellow text word by word
-			// Use same X calculation as white text to ensure alignment
-			// Key: Don't center the cumulative text itself - position it at the same X as full white text
-			//
-			// Approach: Calculate fixed X position using full text width, apply to all yellow renders
-			// FFmpeg limitation: Can't reference text_w of other drawtext in same filter
-			//
-			// Working solution: Render full line ghost in yellow to get positioning, then clip
-			// Or: Use fixed X value calculated from estimated full line width
-			//
-			// Best practical solution: Estimate full line width, calculate center X, render cumulative from there
-			estimatedCharWidth := 28.0 // DejaVu Sans Bold 52pt average
-			estimatedFullWidth := float64(len(lyric.Text)) * estimatedCharWidth
-			baseXPos := (float64(vr.Width) - estimatedFullWidth) / 2.0
-
-			for wordIdx := range words {
-				wordStartTime := startTime + float64(wordIdx)*wordDuration
-				wordEndTime := wordStartTime + wordDuration
-
-				cumulativeWords := words[:wordIdx+1]
-				cumulativeText := escapeText(strings.Join(cumulativeWords, " "))
-
-				// Render cumulative text at fixed base X (left-aligned from center point)
-				wordHighlight := fmt.Sprintf("drawtext=text='%s':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:fontsize=52:x=%.0f:y=%d:fontcolor=yellow:enable=between(t\\,%.2f\\,%.2f)",
-					cumulativeText, baseXPos, centerY, wordStartTime, wordEndTime)
-				filterParts = append(filterParts, wordHighlight)
-			}
+		// Position 3: Future line (30% opacity) - show line i+2 while current is active
+		if i < len(displayLines)-2 {
+			next2Line := displayLines[i+2]
+			next2EscapedText := escapeText(next2Line.Text)
+			filter3 := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=64:fontcolor=0x4169E1@0.3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:borderw=3:bordercolor=white@0.3:enable=between(t\\,%.2f\\,%.2f)",
+				next2EscapedText, line3Y, line.StartTime, line.EndTime)
+			filterParts = append(filterParts, filter3)
 		}
 
-		// Preview line (next line at 50% opacity)
-		if i < len(opts.LyricsData)-1 {
-			nextLyric := opts.LyricsData[i+1]
-			escapedNextText := escapeText(nextLyric.Text)
-			previewFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=44:fontcolor=white@0.5:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:enable=between(t\\,%.2f\\,%.2f)",
-				escapedNextText, previewY, startTime, endTime)
-			filterParts = append(filterParts, previewFilter)
+		// Position 4: Future line (10% opacity) - show line i+3 while current is active
+		if i < len(displayLines)-3 {
+			next3Line := displayLines[i+3]
+			next3EscapedText := escapeText(next3Line.Text)
+			filter4 := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=64:fontcolor=0x4169E1@0.1:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:borderw=3:bordercolor=white@0.1:enable=between(t\\,%.2f\\,%.2f)",
+				next3EscapedText, line4Y, line.StartTime, line.EndTime)
+			filterParts = append(filterParts, filter4)
 		}
 	}
 
@@ -453,27 +592,54 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 		// Position at 25% from bottom (centered)
 		progressBarY := int(float64(vr.Height) * 0.75)
 		progressWidth := 600
-		progressFilter := fmt.Sprintf("drawbox=x=(w-%d)/2:y=%d:w=%d*min(1\\,t/%.2f):h=6:color=yellow:enable=lt(t\\,%.2f)",
+		progressFilter := fmt.Sprintf("drawbox=x=(w-%d)/2:y=%d:w=%d*min(1\\,t/%.2f):h=6:color=0xFFD700:enable=lt(t\\,%.2f)",
 			progressWidth, progressBarY, progressWidth, vocalOnset, vocalOnset)
 		filterParts = append(filterParts, progressFilter)
 
-		countdownFilter := fmt.Sprintf("drawtext=text='Starting in %%{eif\\:max(0\\,%.2f-t)\\:d}s':x=(w-text_w)/2:y=%d:fontsize=36:fontcolor=yellow:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:enable=lt(t\\,%.2f)",
+		countdownFilter := fmt.Sprintf("drawtext=text='Starting in %%{eif\\:max(0\\,%.2f-t)\\:d}s':x=(w-text_w)/2:y=%d:fontsize=36:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2:enable=lt(t\\,%.2f)",
 			vocalOnset, progressBarY-40, vocalOnset)
 		filterParts = append(filterParts, countdownFilter)
 	}
 
 	filterStr := strings.Join(filterParts, ",")
 
-	cmd := exec.Command("ffmpeg",
-		"-i", inputPath,
-		"-vf", filterStr,
-		"-c:v", "libx264",
-		"-preset", "medium",
-		"-crf", "23",
-		"-c:a", "copy",
-		"-y",
-		tempPath,
-	)
+	// For very long filter strings (many lyrics), write to file to avoid ARG_MAX limit
+	var cmd *exec.Cmd
+	if len(filterStr) > 100000 { // ~100KB threshold
+		// Write filter to temporary file
+		filterFile, err := os.CreateTemp("", "ffmpeg-filter-*.txt")
+		if err != nil {
+			return "", fmt.Errorf("failed to create filter file: %w", err)
+		}
+		defer os.Remove(filterFile.Name())
+		defer filterFile.Close()
+
+		if _, err := filterFile.WriteString(filterStr); err != nil {
+			return "", fmt.Errorf("failed to write filter file: %w", err)
+		}
+		filterFile.Close()
+
+		log.Printf("Using filter file (filter length: %d bytes) for lyrics overlay", len(filterStr))
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-filter_complex_script", filterFile.Name(),
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			tempPath,
+		)
+	} else {
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-vf", filterStr,
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			tempPath,
+		)
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -484,45 +650,24 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 }
 
 // addAudio adds audio to the video
-func (vr *VideoRenderer) addAudio(videoPath, audioPath string, duration float64) (string, error) {
-	tempPath := filepath.Join(vr.TempDir, "with_audio.mp4")
-
+// addAudioAndEncode adds audio and encodes final video in one step
+func (vr *VideoRenderer) addAudioAndEncode(videoPath, audioPath string, duration float64, outputPath string) (string, error) {
 	cmd := exec.Command("ffmpeg",
 		"-i", videoPath,
 		"-i", audioPath,
-		"-c:v", "copy",
+		"-c:v", "libx264",
+		"-preset", "medium",
+		"-crf", "23",
 		"-c:a", "aac",
 		"-b:a", "192k",
 		"-shortest",
-		"-y",
-		tempPath,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("ffmpeg add audio failed: %w\nOutput: %s", err, string(output))
-	}
-
-	return tempPath, nil
-}
-
-// encodeFinalVideo encodes the final video with optimized settings
-func (vr *VideoRenderer) encodeFinalVideo(inputPath, outputPath string) (string, error) {
-	cmd := exec.Command("ffmpeg",
-		"-i", inputPath,
-		"-c:v", "libx264",
-		"-preset", "medium",
-		"-crf", "20",
-		"-c:a", "aac",
-		"-b:a", "192k",
-		"-movflags", "+faststart",
 		"-y",
 		outputPath,
 	)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg final encode failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("ffmpeg add audio and encode failed: %w\nOutput: %s", err, string(output))
 	}
 
 	return outputPath, nil

@@ -72,19 +72,25 @@ func (p *Processor) Process(item *models.QueueItem, song *models.Song) error {
 func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) error {
 	p.updateProgress(item, "Analyzing audio", 5, "Loading audio files")
 
-	// Determine which audio file to analyze (prefer vocals stem, fallback to mixed)
-	audioPath := song.VocalsStemPath
-	if audioPath == "" {
-		audioPath = song.MixedAudioPath
+	// For BPM/tempo analysis, use instrumental track (more accurate rhythm detection)
+	// For vocal timing, use vocals track
+	bpmAudioPath := song.MusicStemPath
+	vocalAudioPath := song.VocalsStemPath
+
+	if bpmAudioPath == "" {
+		bpmAudioPath = song.MixedAudioPath
 	}
-	if audioPath == "" {
+	if vocalAudioPath == "" {
+		vocalAudioPath = song.MixedAudioPath
+	}
+	if bpmAudioPath == "" {
 		return fmt.Errorf("no audio file available for analysis")
 	}
 
 	p.updateProgress(item, "Analyzing audio", 10, "Running audio analysis (BPM, key, timing)")
 
-	// Run Python audio analyzer
-	analysis, err := audio.AnalyzeAudio(audioPath)
+	// Run Python audio analyzer on instrumental track for BPM/tempo
+	analysis, err := audio.AnalyzeAudio(bpmAudioPath)
 	if err != nil {
 		return fmt.Errorf("audio analysis failed: %w", err)
 	}
@@ -96,6 +102,15 @@ func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) erro
 	song.Key = analysis.Key
 	song.Tempo = analysis.Tempo
 	song.DurationSeconds = analysis.DurationSeconds
+
+	// If we have separate vocal track, analyze it for vocal timing
+	if vocalAudioPath != "" && vocalAudioPath != bpmAudioPath {
+		vocalAnalysis, err := audio.AnalyzeAudio(vocalAudioPath)
+		if err == nil && len(vocalAnalysis.VocalSegments) > 0 {
+			analysis.VocalSegments = vocalAnalysis.VocalSegments
+			analysis.VocalSegmentCount = vocalAnalysis.VocalSegmentCount
+		}
+	}
 
 	// Store vocal timing as JSON string
 	if len(analysis.VocalSegments) > 0 {
