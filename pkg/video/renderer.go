@@ -333,7 +333,7 @@ func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRender
 	// Default spectrum settings if not specified
 	spectrumStyle := opts.SpectrumStyle
 	if spectrumStyle == "" {
-		spectrumStyle = "showfreqs" // Default to frequency bars
+		spectrumStyle = "stereo" // Default to stereo spectrum visualizer
 	}
 
 	spectrumColor := opts.SpectrumColor
@@ -348,21 +348,33 @@ func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRender
 
 	// Determine if using rainbow or mono color
 	useRainbow := (spectrumColor == "rainbow")
-	monoColorHex := "0x303030" // Default charcoal gray rgba(48,48,48)
-	if !useRainbow && spectrumColor != "charcoal" {
-		// Convert color name to hex
-		monoColorHex = getColorHex(spectrumColor)
-	}
+	monoColorHex := "0x00FFFF" // Default bright cyan
 
-	// Calculate bar height (50% taller for showfreqs = 1.5x)
-	barHeightMultiplier := 1.0
-	if spectrumStyle == "showfreqs" || spectrumStyle == "bars" || spectrumStyle == "equalizer" {
-		barHeightMultiplier = 1.5 // 50% taller bars
+	// Map color names to bright hex values for spectrum visualization
+	if !useRainbow {
+		colorMap := map[string]string{
+			"charcoal": "0x808080", // Medium gray (brighter than 0x303030)
+			"cyan":     "0x00FFFF", // Bright cyan
+			"blue":     "0x0080FF", // Bright blue
+			"red":      "0xFF0000", // Bright red
+			"green":    "0x00FF00", // Bright green
+			"yellow":   "0xFFFF00", // Bright yellow
+			"magenta":  "0xFF00FF", // Bright magenta
+			"white":    "0xFFFFFF", // White
+			"orange":   "0xFF8000", // Bright orange
+			"purple":   "0x8000FF", // Bright purple
+			"pink":     "0xFF00FF", // Bright pink (magenta)
+			"gold":     "0xFFD700", // Gold
+		}
+
+		if hex, ok := colorMap[spectrumColor]; ok {
+			monoColorHex = hex
+		}
 	}
-	barHeight := int(float64(vr.Height) * barHeightMultiplier)
 
 	// Build spectrum visualization filter based on style
 	var spectrumFilter string
+	var filterComplex string
 
 	switch spectrumStyle {
 	case "showwaves":
@@ -372,22 +384,21 @@ func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRender
 			spectrumFilter = fmt.Sprintf("[1:a]showwaves=s=%dx%d:mode=cline:colors=red|orange|yellow|green|cyan|blue|violet:scale=sqrt,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
 				vr.Width, vr.Height, spectrumOpacity)
 		} else {
-			// Mono color waveform
+			// Mono color waveform with explicit hex color
 			spectrumFilter = fmt.Sprintf("[1:a]showwaves=s=%dx%d:mode=cline:colors=%s:scale=sqrt,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
 				vr.Width, vr.Height, monoColorHex, spectrumOpacity)
 		}
 
 	case "showfreqs", "bars", "equalizer":
 		// Frequency spectrum bars (classic equalizer bars) - vertical bars dancing with music
-		// 50% taller bars for better visibility
 		if useRainbow {
 			// Rainbow gradient bars
 			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=red|orange|yellow|green|cyan|blue|violet,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
-				vr.Width, barHeight, spectrumOpacity)
+				vr.Width, vr.Height, spectrumOpacity)
 		} else {
-			// Mono color bars (default charcoal gray)
+			// Mono color bars with explicit hex color for brightness
 			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=%s,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
-				vr.Width, barHeight, monoColorHex, spectrumOpacity)
+				vr.Width, vr.Height, monoColorHex, spectrumOpacity)
 		}
 
 	case "showspectrum", "spectrum":
@@ -419,32 +430,89 @@ func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRender
 		spectrumFilter = fmt.Sprintf("[1:a]avectorscope=s=%dx%d:zoom=1.5:draw=line,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
 			vr.Width, vr.Height, spectrumOpacity)
 
-	default:
-		// Default to showfreqs bars (classic equalizer style)
+	case "stereo", "":
+		// Stereo spectrum visualizer - left/right channel bars on edges growing inward
+		barWidth := 300               // How far bars extend inward from edge
+		visualizerHeight := vr.Height // Full height (1024)
+
+		var colorParam string
+
 		if useRainbow {
-			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=red|orange|yellow|green|cyan|blue|violet,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
-				vr.Width, vr.Height, spectrumOpacity)
+			colorParam = ":colors=red|orange|yellow|green|cyan|blue|violet"
 		} else {
-			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=%s,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
-				vr.Width, vr.Height, monoColorHex, spectrumOpacity)
+			colorParam = ":colors=white"
+		}
+
+		// Left channel: transpose=2 (90° CCW), then hflip so bars grow INWARD (rightward)
+		// Bars positioned at left edge (x=0), extending toward center
+		leftChain := fmt.Sprintf("s=%dx%d:mode=bar:fscale=log:ascale=log%s,transpose=2,hflip,format=yuva420p,colorchannelmixer=aa=%.2f",
+			visualizerHeight, barWidth, colorParam, spectrumOpacity)
+
+		// Right channel: transpose=1 (90° CW), hflip for inward growth, vflip to match left frequency orientation
+		// Bars positioned at right edge (x=W-w), extending toward center, low freqs at bottom
+		rightChain := fmt.Sprintf("s=%dx%d:mode=bar:fscale=log:ascale=log%s,transpose=1,hflip,vflip,format=yuva420p,colorchannelmixer=aa=%.2f",
+			visualizerHeight, barWidth, colorParam, spectrumOpacity)
+
+		if !useRainbow {
+			leftChain += ",eq=saturation=0"
+			rightChain += ",eq=saturation=0"
+		}
+
+		spectrumFilter = fmt.Sprintf(
+			"[1:a]channelsplit=channel_layout=stereo[L][R];"+
+				"[L]showfreqs=%s[left_vis];"+
+				"[R]showfreqs=%s[right_vis]",
+			leftChain, rightChain)
+
+		// Now overlay bars at edges: left at x=0, right at x=W-w
+		filterComplex = fmt.Sprintf(
+			"%s;"+
+				"[0:v][left_vis]overlay=0:0[v1];"+
+				"[v1][right_vis]overlay=W-w:0[outv]",
+			spectrumFilter) // Skip the default overlay logic below
+		goto applyFilter
+
+	default:
+		// Fallback: Simple waveform at bottom
+		waveHeight := vr.Height / 4
+		spectrumFilter = fmt.Sprintf("[1:a]showwaves=s=%dx%d:mode=cline:colors=%s:rate=25,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+			vr.Width, waveHeight, monoColorHex, spectrumOpacity)
+	}
+
+	// Determine overlay position (stereo mode jumps here directly)
+	if filterComplex == "" {
+		if spectrumStyle == "showfreqs" || spectrumStyle == "bars" || spectrumStyle == "equalizer" {
+			// Position at bottom of screen
+			waveHeight := vr.Height / 4
+			yPosition := vr.Height - waveHeight
+			filterComplex = fmt.Sprintf("%s;[0:v][spectrum]overlay=0:%d[outv]", spectrumFilter, yPosition)
+		} else {
+			// Default: fullscreen overlay
+			filterComplex = fmt.Sprintf("%s;[0:v][spectrum]overlay=0:0[outv]", spectrumFilter)
 		}
 	}
 
-	// Overlay spectrum on video
-	filterComplex := fmt.Sprintf("%s;[0:v][spectrum]overlay=0:0[outv]", spectrumFilter)
-
+applyFilter:
 	cmd := exec.Command("ffmpeg",
 		"-i", inputPath,
 		"-i", opts.AudioPath,
 		"-filter_complex", filterComplex,
 		"-map", "[outv]",
+		"-map", "1:a",
 		"-c:v", "libx264",
+		"-c:a", "aac",
+		"-b:a", "192k",
 		"-preset", "medium",
 		"-crf", "23",
 		"-t", fmt.Sprintf("%.2f", opts.Duration),
 		"-y",
 		tempPath,
 	)
+
+	// DEBUG: Log the exact FFmpeg command
+	log.Printf("[SPECTRUM DEBUG] Filter: %s", filterComplex)
+	log.Printf("[SPECTRUM DEBUG] Full command: ffmpeg -i %s -i %s -filter_complex '%s' -map '[outv]' -map '1:a' -c:v libx264 -c:a aac -b:a 192k -preset medium -crf 23 -t %.2f -y %s",
+		inputPath, opts.AudioPath, filterComplex, opts.Duration, tempPath)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -739,12 +807,19 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 				LineIndex: i,
 			})
 		} else {
-			// Try to break at comma if it's in middle 30-70%
+			// Try to break at comma ANYWHERE in the text (not just middle 30-70%)
 			commaPos := -1
-			for idx, ch := range text {
-				if ch == ',' {
-					percentPos := float64(idx) / float64(len(text))
-					if percentPos >= 0.30 && percentPos <= 0.70 {
+			// Find the LAST comma before maxCharsPerLine
+			for idx := min(len(text)-1, maxCharsPerLine); idx > 0; idx-- {
+				if text[idx] == ',' {
+					commaPos = idx
+					break
+				}
+			}
+			// If no comma in first maxChars, try ANY comma
+			if commaPos < 0 {
+				for idx, ch := range text {
+					if ch == ',' {
 						commaPos = idx
 						break
 					}
@@ -752,24 +827,61 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 			}
 
 			duration := endTime - startTime
-			if commaPos > 0 {
+			if commaPos > 0 && commaPos < len(text)-1 {
 				// Break at comma
 				line1 := strings.TrimSpace(text[:commaPos+1])
 				line2 := strings.TrimSpace(text[commaPos+1:])
-				midTime := startTime + duration*0.5
 
-				displayLines = append(displayLines, DisplayLine{
-					Text:      line1,
-					StartTime: startTime,
-					EndTime:   midTime,
-					LineIndex: i,
-				})
-				displayLines = append(displayLines, DisplayLine{
-					Text:      line2,
-					StartTime: midTime,
-					EndTime:   endTime,
-					LineIndex: i,
-				})
+				// Check if line2 is still too long, recursively break it
+				if len(line2) > maxCharsPerLine {
+					// Split the time proportionally
+					line1Ratio := float64(len(line1)) / float64(len(text))
+					line1Time := startTime + duration*line1Ratio
+
+					displayLines = append(displayLines, DisplayLine{
+						Text:      line1,
+						StartTime: startTime,
+						EndTime:   line1Time,
+						LineIndex: i,
+					})
+
+					// Recursively process line2 by adding it back to processing
+					// For now, just split at midpoint
+					midPoint := len(line2) / 2
+					subLine1 := strings.TrimSpace(line2[:midPoint])
+					subLine2 := strings.TrimSpace(line2[midPoint:])
+					midTime := line1Time + (endTime-line1Time)*0.5
+
+					displayLines = append(displayLines, DisplayLine{
+						Text:      subLine1,
+						StartTime: line1Time,
+						EndTime:   midTime,
+						LineIndex: i,
+					})
+					displayLines = append(displayLines, DisplayLine{
+						Text:      subLine2,
+						StartTime: midTime,
+						EndTime:   endTime,
+						LineIndex: i,
+					})
+				} else {
+					// Simple two-line break
+					line1Ratio := float64(len(line1)) / float64(len(text))
+					midTime := startTime + duration*line1Ratio
+
+					displayLines = append(displayLines, DisplayLine{
+						Text:      line1,
+						StartTime: startTime,
+						EndTime:   midTime,
+						LineIndex: i,
+					})
+					displayLines = append(displayLines, DisplayLine{
+						Text:      line2,
+						StartTime: midTime,
+						EndTime:   endTime,
+						LineIndex: i,
+					})
+				}
 			} else {
 				// Break at last space before max chars (fixed bounds check)
 				breakPos := -1

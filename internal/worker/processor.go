@@ -569,8 +569,10 @@ func getSpectrumStyle(styleName string) string {
 	// Map style name to FFmpeg filter
 	// Support direct filter names or aliases
 	switch styleName {
+	case "stereo", "dual", "leftright":
+		return "stereo" // Stereo visualizer with left/right channel bars (default)
 	case "showfreqs", "bars", "equalizer", "freq":
-		return "showfreqs" // Classic equalizer bars (default)
+		return "showfreqs" // Classic equalizer bars
 	case "showspectrum", "spectrum", "spectro":
 		return "showspectrum" // Stationary spectrum display
 	case "showcqt", "cqt", "professional":
@@ -582,7 +584,7 @@ func getSpectrumStyle(styleName string) string {
 	case "avectorscope", "scope", "circle":
 		return "avectorscope" // Circular vector scope
 	default:
-		return "showfreqs" // Default to equalizer bars
+		return "stereo" // Default to stereo visualizer
 	}
 }
 

@@ -36,13 +36,23 @@ type VocalSegment struct {
 // AnalyzeAudio analyzes an audio file using the Python librosa script
 func AnalyzeAudio(audioPath string) (*AudioAnalysis, error) {
 	// Get absolute path to analyzer script
-	// Assumes it's in pkg/audio/analyzer.py relative to binary location
-	execPath, err := os.Executable()
+	// First try relative to working directory, then relative to binary
+	cwd, err := os.Getwd()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get executable path: %w", err)
+		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
-	execDir := filepath.Dir(execPath)
-	scriptPath := filepath.Join(execDir, "pkg", "audio", "analyzer.py")
+
+	// Try working directory first (for development)
+	scriptPath := filepath.Join(cwd, "pkg", "audio", "analyzer.py")
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		// Fall back to binary location (for production)
+		execPath, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get executable path: %w", err)
+		}
+		execDir := filepath.Dir(execPath)
+		scriptPath = filepath.Join(execDir, "pkg", "audio", "analyzer.py")
+	}
 
 	// Execute Python script
 	cmd := exec.Command("python3", scriptPath, audioPath)

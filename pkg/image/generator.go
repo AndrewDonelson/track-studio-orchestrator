@@ -22,21 +22,39 @@ const (
 	DEFAULT_HEIGHT = 1024
 	DEFAULT_STEPS  = 25
 
-	// Default master art style prompt (TODO: make configurable from webapp settings)
-	DEFAULT_MASTER_STYLE = "do not render any text or letters in the image, ultra wide cinematic composition, photorealistic, 4k quality, professional photography"
+	// Master negative prompt - ALWAYS included to prevent text in images
+	MASTER_NEGATIVE_PROMPT = `text, letters, words, typography, watermark, signature, logo, brand names, writing, captions, subtitles, title, credit, copyright notice, numbers, symbols, alphabet, characters, ui elements, overlays, labels, tags, readable signs, store names, street signs, billboards with text, posters with words, ugly, blurry, low quality, distorted, deformed, disfigured, cartoon, anime, CGI, artificial, fake, amateur, pixelated, grainy, noisy, oversaturated, undersaturated, washed out`
+
+	// LLM system prompt for generating cinematic image descriptions
+	IMAGE_PROMPT_SYSTEM = `You are an expert cinematic photographer creating detailed image prompts for AI image generation.
+
+CRITICAL RULES:
+1. NEVER include text, letters, words, or any written content in the image description
+2. Create photorealistic, cinematic scenes only
+3. Be extremely specific about visual details
+4. Always include: scene, location, lighting, mood, colors, and camera details
+5. Output length: 150-200 words
+6. Professional photography quality
+
+STRUCTURE YOUR RESPONSE:
+[Vivid scene description] at [specific location with details], [subject and action if any], [detailed lighting description with source and quality], [atmospheric mood], [specific color palette with 3-5 colors], shot with [camera lens and settings], [composition style], photorealistic, professional photography, 8K resolution, ultra detailed, sharp focus, cinematic composition, award-winning photography
+
+EXAMPLE:
+"Beautiful beach at golden hour at Miami coastline with distant palm trees and gentle waves, woman in flowing white dress standing at water's edge with back to camera, dramatic golden hour sunlight streaming through clouds creating warm rim lighting, romantic and dreamy atmosphere, warm color palette with deep oranges, soft pinks, and purple sky gradients, shot with 85mm lens at f/2.8 creating shallow depth of field from low angle emphasizing dramatic sky, rule of thirds composition, photorealistic, professional photography, 8K resolution, ultra detailed, sharp focus, cinematic composition, award-winning photography"
+
+DO NOT include any preamble or explanation - output ONLY the image prompt.`
 )
 
 type ImageGenerator struct {
-	BaseURL     string
-	LLMURL      string
-	ImageModel  string
-	LLMModel    string
-	OutputDir   string
-	Width       int
-	Height      int
-	Steps       int
-	Timeout     time.Duration
-	MasterStyle string // Master art style prompt
+	BaseURL    string
+	LLMURL     string
+	ImageModel string
+	LLMModel   string
+	OutputDir  string
+	Width      int
+	Height     int
+	Steps      int
+	Timeout    time.Duration
 
 	// Timing statistics for adaptive timeouts and ETAs
 	LLMTimings       []time.Duration
@@ -60,11 +78,12 @@ type LLMResponse struct {
 
 // z-image API request/response
 type ZImageRequest struct {
-	Prompt string `json:"prompt"`
-	Model  string `json:"model"`
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
-	Steps  int    `json:"steps"`
+	Prompt         string `json:"prompt"`
+	NegativePrompt string `json:"negative_prompt,omitempty"`
+	Model          string `json:"model"`
+	Width          int    `json:"width"`
+	Height         int    `json:"height"`
+	Steps          int    `json:"steps"`
 }
 
 type ZImageResponse struct {
@@ -87,7 +106,6 @@ func NewImageGenerator(outputDir string) *ImageGenerator {
 		Height:           DEFAULT_HEIGHT,
 		Steps:            DEFAULT_STEPS,
 		Timeout:          300 * time.Second, // 5 minutes for image generation
-		MasterStyle:      DEFAULT_MASTER_STYLE,
 		LLMTimings:       make([]time.Duration, 0),
 		ImageTimings:     make([]time.Duration, 0),
 		MaxTimingSamples: 10, // Keep last 10 samples for rolling average
@@ -104,24 +122,26 @@ func (ig *ImageGenerator) EnhancePromptWithLLM(sectionType, lyricsContent, style
 		}
 	}()
 
-	// Master art style prompt + lyrics → image prompt
-	userPrompt := fmt.Sprintf(`%s
+	// Limit lyrics to prevent token overflow (approx 500 chars)
+	if len(lyricsContent) > 500 {
+		lyricsContent = lyricsContent[:500] + "..."
+	}
 
-Song Section: %s
-Additional Style Keywords: %s
+	// Create cinematic image prompt using MasterImagePrompt template
+	userPrompt := fmt.Sprintf(`Song Section: %s
+Additional Style: %s
 
 Lyrics:
 %s
 
-Based on the master art style and these lyrics, create a detailed image generation prompt that captures the mood and visuals of this section. Return ONLY the image prompt, nothing else.`,
-		ig.MasterStyle,
+Generate a cinematic, photorealistic image prompt that captures the visual essence of these lyrics. Remember: NO text or letters in the image.`,
 		sectionType,
 		styleKeywords,
 		lyricsContent)
 
 	req := LLMRequest{
 		Model:  ig.LLMModel,
-		Prompt: userPrompt,
+		Prompt: IMAGE_PROMPT_SYSTEM + "\n\n" + userPrompt,
 		Stream: false,
 	}
 
@@ -151,7 +171,10 @@ Based on the master art style and these lyrics, create a detailed image generati
 		return "", fmt.Errorf("failed to decode LLM response: %w", err)
 	}
 
+	// Clean up the response (remove any potential quotes or formatting)
 	enhancedPrompt := strings.TrimSpace(llmResp.Response)
+	enhancedPrompt = strings.Trim(enhancedPrompt, "\"'")
+
 	return enhancedPrompt, nil
 }
 
@@ -169,14 +192,16 @@ func (ig *ImageGenerator) GenerateImage(prompt, outputFilename string) (string, 
 		return "", fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	enhancedPrompt := fmt.Sprintf("%s, cinematic composition, photorealistic, 4k quality, professional photography", prompt)
+	// Add quality modifiers and negative prompt handling
+	enhancedPrompt := fmt.Sprintf("%s, photorealistic, professional photography, 8K resolution, ultra detailed, sharp focus, cinematic composition, award-winning photography", prompt)
 
 	req := ZImageRequest{
-		Prompt: enhancedPrompt,
-		Model:  ig.ImageModel,
-		Width:  ig.Width,
-		Height: ig.Height,
-		Steps:  ig.Steps,
+		Prompt:         enhancedPrompt,
+		NegativePrompt: MASTER_NEGATIVE_PROMPT,
+		Model:          ig.ImageModel,
+		Width:          ig.Width,
+		Height:         ig.Height,
+		Steps:          ig.Steps,
 	}
 
 	reqBody, err := json.Marshal(req)
