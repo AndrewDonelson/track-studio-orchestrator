@@ -63,7 +63,7 @@ func (pb *ProgressBroadcaster) Broadcast(update ProgressUpdate) {
 	defer pb.mutex.RUnlock()
 
 	update.Timestamp = time.Now()
-	
+
 	for client := range pb.clients {
 		select {
 		case client <- update:
@@ -74,7 +74,7 @@ func (pb *ProgressBroadcaster) Broadcast(update ProgressUpdate) {
 		}
 	}
 
-	log.Printf("Progress update broadcast: queue_id=%d, step=%s, progress=%d%%", 
+	log.Printf("Progress update broadcast: queue_id=%d, step=%s, progress=%d%%",
 		update.QueueID, update.CurrentStep, update.Progress)
 }
 

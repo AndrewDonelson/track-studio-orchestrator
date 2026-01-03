@@ -73,7 +73,7 @@ func (h *ProgressHandler) StreamProgress(c *gin.Context) {
 // StreamQueueProgress streams progress for a specific queue item
 func (h *ProgressHandler) StreamQueueProgress(c *gin.Context) {
 	queueID := c.Param("id")
-	
+
 	// Set headers for SSE
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
