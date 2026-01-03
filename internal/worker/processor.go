@@ -394,6 +394,9 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 		BPM:               song.BPM,
 		Title:             song.Title,
 		Artist:            song.ArtistName,
+		SpectrumStyle:     getSpectrumStyle(song.SpectrumStyle),
+		SpectrumColor:     getSpectrumColorHex(song.SpectrumColor),
+		SpectrumOpacity:   getSpectrumOpacity(song.SpectrumOpacity),
 		OutputPath:        videoPath,
 	}
 
@@ -559,6 +562,46 @@ func (p *Processor) uploadToYouTube(item *models.QueueItem, song *models.Song) e
 
 	log.Printf("YouTube upload complete for song: %s", song.Title)
 	return nil
+}
+
+// getSpectrumStyle returns the FFmpeg spectrum visualization style
+func getSpectrumStyle(styleName string) string {
+	// Map style name to FFmpeg filter
+	// Support direct filter names or aliases
+	switch styleName {
+	case "showfreqs", "bars", "equalizer", "freq":
+		return "showfreqs" // Classic equalizer bars (default)
+	case "showspectrum", "spectrum", "spectro":
+		return "showspectrum" // Stationary spectrum display
+	case "showcqt", "cqt", "professional":
+		return "showcqt" // High-quality CQT spectrum with bars
+	case "showwaves", "wave", "waveform":
+		return "showwaves" // Smooth waveform
+	case "showvolume", "volume", "meter":
+		return "showvolume" // Volume meter
+	case "avectorscope", "scope", "circle":
+		return "avectorscope" // Circular vector scope
+	default:
+		return "showfreqs" // Default to equalizer bars
+	}
+}
+
+// getSpectrumColorHex returns color setting (rainbow or color name)
+func getSpectrumColorHex(colorName string) string {
+	// Return color as-is if it's "rainbow" or a recognized color name
+	// The renderer will handle rainbow vs mono color logic
+	if colorName == "" {
+		return "rainbow" // Default
+	}
+	return colorName
+}
+
+// getSpectrumOpacity returns the opacity value (0.0-1.0)
+func getSpectrumOpacity(opacity float64) float64 {
+	if opacity > 0 && opacity <= 1.0 {
+		return opacity
+	}
+	return 0.3 // Default 30% opacity
 }
 
 // updateProgress updates the queue item progress and broadcasts it

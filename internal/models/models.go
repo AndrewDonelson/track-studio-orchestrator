@@ -56,8 +56,9 @@ type Song struct {
 
 	// Video settings
 	BackgroundStyle  string  `json:"background_style" db:"background_style"`
-	SpectrumColor    string  `json:"spectrum_color" db:"spectrum_color"`
-	SpectrumOpacity  float64 `json:"spectrum_opacity" db:"spectrum_opacity"`
+	SpectrumStyle    string  `json:"spectrum_style" db:"spectrum_style"`     // Visualization type: showfreqs, showspectrum, showcqt, etc.
+	SpectrumColor    string  `json:"spectrum_color" db:"spectrum_color"`     // Color: rainbow, cyan, blue, red, etc.
+	SpectrumOpacity  float64 `json:"spectrum_opacity" db:"spectrum_opacity"` // Opacity: 0.0-1.0
 	TargetResolution string  `json:"target_resolution" db:"target_resolution"`
 	ShowMetadata     bool    `json:"show_metadata" db:"show_metadata"`
 }

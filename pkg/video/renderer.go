@@ -48,6 +48,11 @@ type VideoRenderOptions struct {
 	Title  string
 	Artist string
 
+	// Spectrum Analyzer
+	SpectrumStyle   string  // "showwaves", "showfreqs", "showspectrum", etc.
+	SpectrumColor   string  // Color for spectrum (hex or color name)
+	SpectrumOpacity float64 // Opacity for spectrum overlay (0.0-1.0)
+
 	// Output
 	OutputPath string
 }
@@ -98,21 +103,28 @@ func (vr *VideoRenderer) RenderVideo(opts *VideoRenderOptions) (string, error) {
 		return "", fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	log.Println("Step 1/3: Creating image slideshow with metadata and branding...")
+	log.Println("Step 1/4: Creating image slideshow with metadata and branding...")
 	basePath, err := vr.createBasicVideo(opts)
 	if err != nil {
 		return "", fmt.Errorf("failed to create basic video: %w", err)
 	}
 	defer os.Remove(basePath)
 
-	log.Println("Step 2/3: Adding lyrics overlay...")
-	lyricsPath, err := vr.addLyricsOverlay(basePath, opts)
+	log.Println("Step 2/4: Adding spectrum analyzer overlay...")
+	spectrumPath, err := vr.addSpectrumAnalyzer(basePath, opts)
+	if err != nil {
+		return "", fmt.Errorf("failed to add spectrum analyzer: %w", err)
+	}
+	defer os.Remove(spectrumPath)
+
+	log.Println("Step 3/4: Adding lyrics overlay...")
+	lyricsPath, err := vr.addLyricsOverlay(spectrumPath, opts)
 	if err != nil {
 		return "", fmt.Errorf("failed to add lyrics: %w", err)
 	}
 	defer os.Remove(lyricsPath)
 
-	log.Println("Step 3/3: Adding audio and encoding final video...")
+	log.Println("Step 4/4: Adding audio and encoding final video...")
 	finalPath, err := vr.addAudioAndEncode(lyricsPath, opts.AudioPath, opts.Duration, opts.OutputPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode final video: %w", err)
@@ -161,8 +173,8 @@ func (vr *VideoRenderer) createBasicVideo(opts *VideoRenderOptions) (string, err
 
 	// Bottom bar - Title (yellow/gold), Copyright (white), Logo (image overlay)
 	// Song title - bottom left (Saira Condensed 64, yellow/gold)
-	// Position: 20px from left, 80px from bottom
-	titleFilter := fmt.Sprintf("drawtext=text='%s':x=20:y=h-80:fontsize=64:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+	// Position: 20px from left, 96px from bottom (raised 16px)
+	titleFilter := fmt.Sprintf("drawtext=text='%s':x=20:y=h-96:fontsize=64:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
 		escapeText(opts.Title))
 	filterParts = append(filterParts, titleFilter)
 
@@ -184,12 +196,12 @@ func (vr *VideoRenderer) createBasicVideo(opts *VideoRenderOptions) (string, err
 
 	var cmd *exec.Cmd
 	if logoExists {
-		// Use filter_complex to add text overlays + logo overlay (150x150, bottom-right, 20px margins)
+		// Use filter_complex to add text overlays + logo overlay (256x256 with 70% opacity, bottom-right, 20px margins)
 		cmd = exec.Command("ffmpeg",
 			"-i", slideshowPath,
 			"-i", logoPath,
 			"-filter_complex",
-			fmt.Sprintf("[0:v]%s[v1];[1:v]scale=150:150[logo];[v1][logo]overlay=W-w-20:H-h-20[vout]", filterStr),
+			fmt.Sprintf("[0:v]%s[v1];[1:v]scale=256:256,format=rgba,colorchannelmixer=aa=0.7[logo];[v1][logo]overlay=W-w-20:H-h-20[vout]", filterStr),
 			"-map", "[vout]",
 			"-c:v", "libx264",
 			"-preset", "medium",
@@ -216,6 +228,153 @@ func (vr *VideoRenderer) createBasicVideo(opts *VideoRenderOptions) (string, err
 	}
 
 	return tempPath, nil
+}
+
+// addSpectrumAnalyzer adds audio spectrum visualization overlay
+func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRenderOptions) (string, error) {
+	tempPath := filepath.Join(vr.TempDir, "spectrum_"+filepath.Base(opts.OutputPath))
+
+	// Default spectrum settings if not specified
+	spectrumStyle := opts.SpectrumStyle
+	if spectrumStyle == "" {
+		spectrumStyle = "showfreqs" // Default to frequency bars
+	}
+
+	spectrumColor := opts.SpectrumColor
+	if spectrumColor == "" {
+		spectrumColor = "rainbow" // Default rainbow
+	}
+
+	spectrumOpacity := opts.SpectrumOpacity
+	if spectrumOpacity == 0 {
+		spectrumOpacity = 0.3 // Default 30% opacity
+	}
+
+	// Determine if using rainbow or mono color
+	useRainbow := (spectrumColor == "rainbow")
+	monoColorHex := "0x00FFFF" // Default cyan if not rainbow
+	if !useRainbow {
+		// Convert color name to hex
+		monoColorHex = getColorHex(spectrumColor)
+	}
+
+	// Build spectrum visualization filter based on style
+	var spectrumFilter string
+
+	switch spectrumStyle {
+	case "showwaves":
+		// Smooth waveform
+		if useRainbow {
+			// Rainbow gradient waveform
+			spectrumFilter = fmt.Sprintf("[1:a]showwaves=s=%dx%d:mode=cline:colors=red|orange|yellow|green|cyan|blue|violet:scale=sqrt,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+				vr.Width, vr.Height, spectrumOpacity)
+		} else {
+			// Mono color waveform
+			spectrumFilter = fmt.Sprintf("[1:a]showwaves=s=%dx%d:mode=cline:colors=%s:scale=sqrt,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+				vr.Width, vr.Height, monoColorHex, spectrumOpacity)
+		}
+
+	case "showfreqs", "bars", "equalizer":
+		// Frequency spectrum bars (classic equalizer bars) - vertical bars dancing with music
+		if useRainbow {
+			// Rainbow gradient bars
+			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=red|orange|yellow|green|cyan|blue|violet,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+				vr.Width, vr.Height, spectrumOpacity)
+		} else {
+			// Mono color bars
+			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=%s,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+				vr.Width, vr.Height, monoColorHex, spectrumOpacity)
+		}
+
+	case "showspectrum", "spectrum":
+		// Full spectrum visualization (stationary, not scrolling)
+		if useRainbow {
+			// Rainbow gradient spectrum
+			spectrumFilter = fmt.Sprintf("[1:a]showspectrum=s=%dx%d:slide=replace:color=rainbow:scale=sqrt:saturation=3,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+				vr.Width, vr.Height, spectrumOpacity)
+		} else {
+			// Mono color spectrum
+			spectrumFilter = fmt.Sprintf("[1:a]showspectrum=s=%dx%d:slide=replace:color=intensity:scale=sqrt,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+				vr.Width, vr.Height, spectrumOpacity)
+		}
+
+	case "showcqt", "cqt":
+		// High-quality Constant Q Transform spectrum with bars
+		// Frequency range: 50Hz to 20kHz
+		// CQT has built-in colorization, opacity applied after
+		spectrumFilter = fmt.Sprintf("[1:a]showcqt=s=%dx%d:fps=30:bar_h=%d:sono_h=0:bar_t=%.2f:basefreq=50:endfreq=20000,format=rgba[spectrum]",
+			vr.Width, vr.Height, vr.Height/3, spectrumOpacity)
+
+	case "showvolume":
+		// Volume meter
+		spectrumFilter = fmt.Sprintf("[1:a]showvolume=w=%d:h=%d:b=4:f=%.2f,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+			vr.Width/4, vr.Height/10, spectrumOpacity, spectrumOpacity)
+
+	case "avectorscope":
+		// Circular vector scope (stereo field visualization)
+		spectrumFilter = fmt.Sprintf("[1:a]avectorscope=s=%dx%d:zoom=1.5:draw=line,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+			vr.Width, vr.Height, spectrumOpacity)
+
+	default:
+		// Default to showfreqs bars (classic equalizer style)
+		if useRainbow {
+			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=red|orange|yellow|green|cyan|blue|violet,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+				vr.Width, vr.Height, spectrumOpacity)
+		} else {
+			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=%s,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
+				vr.Width, vr.Height, monoColorHex, spectrumOpacity)
+		}
+	}
+
+	// Overlay spectrum on video
+	filterComplex := fmt.Sprintf("%s;[0:v][spectrum]overlay=0:0[outv]", spectrumFilter)
+
+	cmd := exec.Command("ffmpeg",
+		"-i", inputPath,
+		"-i", opts.AudioPath,
+		"-filter_complex", filterComplex,
+		"-map", "[outv]",
+		"-c:v", "libx264",
+		"-preset", "medium",
+		"-crf", "23",
+		"-t", fmt.Sprintf("%.2f", opts.Duration),
+		"-y",
+		tempPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg spectrum analyzer failed: %w\nOutput: %s", err, string(output))
+	}
+
+	colorMode := "rainbow"
+	if !useRainbow {
+		colorMode = spectrumColor
+	}
+	log.Printf("Added %s spectrum analyzer (%s, %.0f%% opacity)", spectrumStyle, colorMode, spectrumOpacity*100)
+	return tempPath, nil
+}
+
+// getColorHex converts color name to hex value for FFmpeg
+func getColorHex(colorName string) string {
+	colors := map[string]string{
+		"cyan":    "0x00FFFF",
+		"blue":    "0x0000FF",
+		"red":     "0xFF0000",
+		"green":   "0x00FF00",
+		"yellow":  "0xFFFF00",
+		"magenta": "0xFF00FF",
+		"white":   "0xFFFFFF",
+		"orange":  "0xFFA500",
+		"purple":  "0x800080",
+		"pink":    "0xFFC0CB",
+		"gold":    "0xFFD700",
+	}
+
+	if hex, ok := colors[colorName]; ok {
+		return hex
+	}
+	return "0x00FFFF" // Default cyan
 }
 
 // createImageSlideshow creates a video from timed image segments with crossfade transitions
