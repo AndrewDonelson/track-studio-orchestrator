@@ -8,6 +8,7 @@ import (
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
+	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/audio"
 )
 
 // Processor handles the actual video processing pipeline
@@ -59,20 +60,50 @@ func (p *Processor) Process(item *models.QueueItem, song *models.Song) error {
 	return nil
 }
 
-// analyzeAudio performs audio analysis
+// analyzeAudio performs audio analysis using librosa
 func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) error {
 	p.updateProgress(item, "Analyzing audio", 5, "Loading audio files")
-	time.Sleep(500 * time.Millisecond) // Simulate work
 
-	p.updateProgress(item, "Analyzing audio", 10, "Detecting BPM and key")
-	time.Sleep(500 * time.Millisecond)
+	// Determine which audio file to analyze (prefer vocals stem, fallback to mixed)
+	audioPath := song.VocalsStemPath
+	if audioPath == "" {
+		audioPath = song.MixedAudioPath
+	}
+	if audioPath == "" {
+		return fmt.Errorf("no audio file available for analysis")
+	}
 
-	p.updateProgress(item, "Analyzing audio", 15, "Analyzing vocal timing")
-	time.Sleep(500 * time.Millisecond)
+	p.updateProgress(item, "Analyzing audio", 10, "Running audio analysis (BPM, key, timing)")
 
-	p.updateProgress(item, "Analyzing audio", 20, "Audio analysis complete")
+	// Run Python audio analyzer
+	analysis, err := audio.AnalyzeAudio(audioPath)
+	if err != nil {
+		return fmt.Errorf("audio analysis failed: %w", err)
+	}
 
-	log.Printf("Audio analysis complete for song: %s", song.Title)
+	p.updateProgress(item, "Analyzing audio", 15, "Processing analysis results")
+
+	// Update song with analysis results
+	song.BPM = analysis.BPM
+	song.Key = analysis.Key
+	song.Tempo = analysis.Tempo
+	song.DurationSeconds = analysis.DurationSeconds
+
+	// Store vocal timing as JSON string
+	if len(analysis.VocalSegments) > 0 {
+		// For now, we'll just store the count and log details
+		log.Printf("Detected %d vocal segments in %s", analysis.VocalSegmentCount, song.Title)
+		log.Printf("Audio Analysis: %s", analysis.Summary())
+	}
+
+	// Save updated song data
+	if err := p.songRepo.Update(song); err != nil {
+		log.Printf("Warning: failed to save audio analysis results: %v", err)
+	}
+
+	p.updateProgress(item, "Analyzing audio", 20, fmt.Sprintf("Analysis complete: %.1f BPM, %s", analysis.BPM, analysis.Key))
+
+	log.Printf("Audio analysis complete for song: %s - %s", song.Title, analysis.Summary())
 	return nil
 }
 

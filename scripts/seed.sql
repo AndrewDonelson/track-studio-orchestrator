@@ -16,6 +16,7 @@ INSERT INTO songs (
     genre,
     vocals_stem_path,
     music_stem_path,
+    mixed_audio_path,
     lyrics,
     bpm,
     duration_seconds,
@@ -28,8 +29,9 @@ INSERT INTO songs (
     'Test Song',
     'Tristan Hart',
     'Electronic',
-    'storage/songs/test/vocals.wav',
-    'storage/songs/test/music.wav',
+    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-song.mp3',
+    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-song.mp3',
+    '/home/andrew/Development/Fullstack-Projects/TrackStudio/test-song.mp3',
     'This is a test song
 With multiple lines
 For testing purposes',
