@@ -9,6 +9,7 @@ import (
 	"github.com/AndrewDonelson/track-studio-orchestrator/config"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/handlers"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
 	"github.com/gin-gonic/gin"
 )
 
@@ -39,9 +40,13 @@ func main() {
 	songRepo := database.NewSongRepository(database.DB)
 	queueRepo := database.NewQueueRepository(database.DB)
 
+	// Create progress broadcaster for live updates
+	broadcaster := services.NewProgressBroadcaster()
+
 	// Create handlers
 	songHandler := handlers.NewSongHandler(songRepo)
-	queueHandler := handlers.NewQueueHandler(queueRepo)
+	queueHandler := handlers.NewQueueHandler(queueRepo, broadcaster)
+	progressHandler := handlers.NewProgressHandler(broadcaster, queueRepo)
 
 	// Create Gin router
 	if cfg.Environment == "production" {
@@ -79,6 +84,14 @@ func main() {
 			queue.GET("/next", queueHandler.GetNext)
 			queue.GET("/:id", queueHandler.GetByID)
 			queue.PUT("/:id", queueHandler.Update)
+		}
+
+		// Progress streaming endpoints (SSE)
+		progress := v1.Group("/progress")
+		{
+			progress.GET("/stream", progressHandler.StreamProgress)
+			progress.GET("/stream/:id", progressHandler.StreamQueueProgress)
+			progress.GET("/stats", progressHandler.GetStats)
 		}
 
 		// Albums endpoints (placeholder)

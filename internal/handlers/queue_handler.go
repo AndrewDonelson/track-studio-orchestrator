@@ -6,17 +6,22 @@ import (
 
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
 	"github.com/gin-gonic/gin"
 )
 
 // QueueHandler handles queue-related requests
 type QueueHandler struct {
-	repo *database.QueueRepository
+	repo        *database.QueueRepository
+	broadcaster *services.ProgressBroadcaster
 }
 
 // NewQueueHandler creates a new queue handler
-func NewQueueHandler(repo *database.QueueRepository) *QueueHandler {
-	return &QueueHandler{repo: repo}
+func NewQueueHandler(repo *database.QueueRepository, broadcaster *services.ProgressBroadcaster) *QueueHandler {
+	return &QueueHandler{
+		repo:        repo,
+		broadcaster: broadcaster,
+	}
 }
 
 // GetAll returns all queue items
@@ -75,6 +80,9 @@ func (h *QueueHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Broadcast queue item creation
+	h.broadcaster.BroadcastFromQueueItem(item, "Queue item created")
+
 	c.JSON(http.StatusCreated, item)
 }
 
@@ -97,6 +105,9 @@ func (h *QueueHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Broadcast queue item update
+	h.broadcaster.BroadcastFromQueueItem(&item, "Queue item updated")
 
 	c.JSON(http.StatusOK, item)
 }
