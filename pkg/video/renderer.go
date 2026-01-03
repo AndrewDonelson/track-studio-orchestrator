@@ -103,28 +103,35 @@ func (vr *VideoRenderer) RenderVideo(opts *VideoRenderOptions) (string, error) {
 		return "", fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	log.Println("Step 1/4: Creating image slideshow with metadata and branding...")
-	basePath, err := vr.createBasicVideo(opts)
-	if err != nil {
-		return "", fmt.Errorf("failed to create basic video: %w", err)
+	log.Println("Step 1/5: Creating image slideshow...")
+	slideshowPath := filepath.Join(vr.TempDir, "slideshow.mp4")
+	if err := vr.createImageSlideshow(opts, slideshowPath); err != nil {
+		return "", fmt.Errorf("failed to create slideshow: %w", err)
 	}
-	defer os.Remove(basePath)
+	defer os.Remove(slideshowPath)
 
-	log.Println("Step 2/4: Adding spectrum analyzer overlay...")
-	spectrumPath, err := vr.addSpectrumAnalyzer(basePath, opts)
+	log.Println("Step 2/5: Adding spectrum analyzer overlay...")
+	spectrumPath, err := vr.addSpectrumAnalyzer(slideshowPath, opts)
 	if err != nil {
 		return "", fmt.Errorf("failed to add spectrum analyzer: %w", err)
 	}
 	defer os.Remove(spectrumPath)
 
-	log.Println("Step 3/4: Adding lyrics overlay...")
-	lyricsPath, err := vr.addLyricsOverlay(spectrumPath, opts)
+	log.Println("Step 3/5: Adding metadata and branding overlays...")
+	metadataPath, err := vr.addMetadataOverlays(spectrumPath, opts)
+	if err != nil {
+		return "", fmt.Errorf("failed to add metadata: %w", err)
+	}
+	defer os.Remove(metadataPath)
+
+	log.Println("Step 4/5: Adding lyrics overlay...")
+	lyricsPath, err := vr.addLyricsOverlay(metadataPath, opts)
 	if err != nil {
 		return "", fmt.Errorf("failed to add lyrics: %w", err)
 	}
 	defer os.Remove(lyricsPath)
 
-	log.Println("Step 4/4: Adding audio and encoding final video...")
+	log.Println("Step 5/5: Adding audio and encoding final video...")
 	finalPath, err := vr.addAudioAndEncode(lyricsPath, opts.AudioPath, opts.Duration, opts.OutputPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode final video: %w", err)
@@ -134,7 +141,96 @@ func (vr *VideoRenderer) RenderVideo(opts *VideoRenderOptions) (string, error) {
 	return finalPath, nil
 }
 
+// addMetadataOverlays adds metadata text and logo to video (after spectrum analyzer)
+func (vr *VideoRenderer) addMetadataOverlays(inputPath string, opts *VideoRenderOptions) (string, error) {
+	tempPath := filepath.Join(vr.TempDir, "with_metadata.mp4")
+
+	// Build comprehensive filter for metadata + branding
+	var filterParts []string
+
+	// Top bar - Yellow/Gold text (Saira Condensed 48pt)
+	// KEY (Top-Left, aligned left, 20px from edges)
+	if opts.Key != "" {
+		keyFilter := fmt.Sprintf("drawtext=text='KEY\\\\: %s':x=20:y=20:fontsize=48:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+			escapeText(opts.Key))
+		filterParts = append(filterParts, keyFilter)
+	}
+
+	// TEMPO (Top-Center, aligned center)
+	if opts.Tempo != "" {
+		tempoFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=20:fontsize=48:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+			escapeText(opts.Tempo))
+		filterParts = append(filterParts, tempoFilter)
+	}
+
+	// BPM (Top-Right, aligned right, 20px from edge)
+	if opts.BPM > 0 {
+		bpmFilter := fmt.Sprintf("drawtext=text='BPM\\\\: %.0f':x=w-text_w-20:y=20:fontsize=48:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+			opts.BPM)
+		filterParts = append(filterParts, bpmFilter)
+	}
+
+	// Bottom bar - Title (yellow/gold), Copyright (white), Logo (image overlay)
+	// Song title - bottom left (Saira Condensed 64, yellow/gold)
+	// Position: 20px from left, 96px from bottom (raised 16px)
+	titleFilter := fmt.Sprintf("drawtext=text='%s':x=20:y=h-96:fontsize=64:fontcolor=0xFFD700:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:shadowcolor=black@0.7:shadowx=2:shadowy=2",
+		escapeText(opts.Title))
+	filterParts = append(filterParts, titleFilter)
+
+	// Copyright - bottom center (Roboto 20, white)
+	// Position: centered horizontally, 25px from bottom
+	copyright := "All content Copyright 2017-2026 Nlaak Studios"
+	copyrightFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=h-25:fontsize=20:fontcolor=white:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:shadowcolor=black@0.7:shadowx=1:shadowy=1",
+		escapeText(copyright))
+	filterParts = append(filterParts, copyrightFilter)
+
+	filterStr := strings.Join(filterParts, ",")
+
+	// Check if artist logo exists for overlay
+	logoPath := filepath.Join("storage", "branding", "artist-logo.png")
+	logoExists := false
+	if _, err := os.Stat(logoPath); err == nil {
+		logoExists = true
+	}
+
+	var cmd *exec.Cmd
+	if logoExists {
+		// Use filter_complex to add text overlays + logo overlay (256x256 with 70% opacity, bottom-right, 20px margins)
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-i", logoPath,
+			"-filter_complex",
+			fmt.Sprintf("[0:v]%s[v1];[1:v]scale=256:256,format=rgba,colorchannelmixer=aa=0.7[logo];[v1][logo]overlay=W-w-20:H-h-20[vout]", filterStr),
+			"-map", "[vout]",
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			tempPath,
+		)
+	} else {
+		// No logo, just text overlays
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-vf", filterStr,
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			tempPath,
+		)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg metadata overlay failed: %w\nOutput: %s", err, string(output))
+	}
+
+	return tempPath, nil
+}
+
 // createBasicVideo creates slideshow with all static overlays (metadata, title, copyright, logo)
+// DEPRECATED: Use createImageSlideshow + addMetadataOverlays separately for better layering
 func (vr *VideoRenderer) createBasicVideo(opts *VideoRenderOptions) (string, error) {
 	tempPath := filepath.Join(vr.TempDir, "base_with_overlays.mp4")
 
@@ -242,7 +338,7 @@ func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRender
 
 	spectrumColor := opts.SpectrumColor
 	if spectrumColor == "" {
-		spectrumColor = "rainbow" // Default rainbow
+		spectrumColor = "charcoal" // Default charcoal gray
 	}
 
 	spectrumOpacity := opts.SpectrumOpacity
@@ -252,11 +348,18 @@ func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRender
 
 	// Determine if using rainbow or mono color
 	useRainbow := (spectrumColor == "rainbow")
-	monoColorHex := "0x00FFFF" // Default cyan if not rainbow
-	if !useRainbow {
+	monoColorHex := "0x303030" // Default charcoal gray rgba(48,48,48)
+	if !useRainbow && spectrumColor != "charcoal" {
 		// Convert color name to hex
 		monoColorHex = getColorHex(spectrumColor)
 	}
+
+	// Calculate bar height (50% taller for showfreqs = 1.5x)
+	barHeightMultiplier := 1.0
+	if spectrumStyle == "showfreqs" || spectrumStyle == "bars" || spectrumStyle == "equalizer" {
+		barHeightMultiplier = 1.5 // 50% taller bars
+	}
+	barHeight := int(float64(vr.Height) * barHeightMultiplier)
 
 	// Build spectrum visualization filter based on style
 	var spectrumFilter string
@@ -276,14 +379,15 @@ func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRender
 
 	case "showfreqs", "bars", "equalizer":
 		// Frequency spectrum bars (classic equalizer bars) - vertical bars dancing with music
+		// 50% taller bars for better visibility
 		if useRainbow {
 			// Rainbow gradient bars
 			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=red|orange|yellow|green|cyan|blue|violet,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
-				vr.Width, vr.Height, spectrumOpacity)
+				vr.Width, barHeight, spectrumOpacity)
 		} else {
-			// Mono color bars
+			// Mono color bars (default charcoal gray)
 			spectrumFilter = fmt.Sprintf("[1:a]showfreqs=s=%dx%d:mode=bar:fscale=log:ascale=sqrt:win_size=4096:colors=%s,format=rgba,colorchannelmixer=aa=%.2f[spectrum]",
-				vr.Width, vr.Height, monoColorHex, spectrumOpacity)
+				vr.Width, barHeight, monoColorHex, spectrumOpacity)
 		}
 
 	case "showspectrum", "spectrum":
@@ -358,23 +462,24 @@ func (vr *VideoRenderer) addSpectrumAnalyzer(inputPath string, opts *VideoRender
 // getColorHex converts color name to hex value for FFmpeg
 func getColorHex(colorName string) string {
 	colors := map[string]string{
-		"cyan":    "0x00FFFF",
-		"blue":    "0x0000FF",
-		"red":     "0xFF0000",
-		"green":   "0x00FF00",
-		"yellow":  "0xFFFF00",
-		"magenta": "0xFF00FF",
-		"white":   "0xFFFFFF",
-		"orange":  "0xFFA500",
-		"purple":  "0x800080",
-		"pink":    "0xFFC0CB",
-		"gold":    "0xFFD700",
+		"charcoal": "0x303030", // rgb(48,48,48)
+		"cyan":     "0x00FFFF",
+		"blue":     "0x0000FF",
+		"red":      "0xFF0000",
+		"green":    "0x00FF00",
+		"yellow":   "0xFFFF00",
+		"magenta":  "0xFF00FF",
+		"white":    "0xFFFFFF",
+		"orange":   "0xFFA500",
+		"purple":   "0x800080",
+		"pink":     "0xFFC0CB",
+		"gold":     "0xFFD700",
 	}
 
 	if hex, ok := colors[colorName]; ok {
 		return hex
 	}
-	return "0x00FFFF" // Default cyan
+	return "0x303030" // Default charcoal
 }
 
 // createImageSlideshow creates a video from timed image segments with crossfade transitions
