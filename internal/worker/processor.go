@@ -377,6 +377,26 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 
 	p.updateProgress(item, "Rendering video", 70, "Composing video with FFmpeg")
 
+	// Generate karaoke subtitles if vocals path is available
+	assSubtitlePath := ""
+	if song.VocalsStemPath != "" {
+		log.Println("Generating word-level karaoke timestamps...")
+		p.updateProgress(item, "Rendering video", 72, "Generating karaoke timestamps")
+
+		// Create karaoke generator
+		karaokeGen := lyrics.NewKaraokeGenerator(execDir)
+
+		// Generate ASS subtitles from vocals
+		tempDir := filepath.Join(execDir, "storage", "temp")
+		assPath, err := karaokeGen.GenerateKaraokeSubtitles(song.VocalsStemPath, int(song.ID), tempDir)
+		if err != nil {
+			log.Printf("Warning: failed to generate karaoke subtitles: %v, using fallback lyrics", err)
+		} else {
+			assSubtitlePath = assPath
+			log.Printf("Generated karaoke subtitles: %s", assSubtitlePath)
+		}
+	}
+
 	// Create video renderer
 	renderer := video.NewVideoRenderer(outputDir)
 
@@ -387,8 +407,9 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 		ImagePaths:        imageSegments,
 		LyricsData:        timedLyrics,
 		VocalOnset:        vocalOnset,
-		CrossfadeDuration: 2.0,   // 2 second crossfade between images
-		EnableKaraoke:     false, // Karaoke highlighting disabled by default
+		CrossfadeDuration: 2.0,             // 2 second crossfade between images
+		EnableKaraoke:     false,           // Karaoke highlighting disabled by default
+		ASSSubtitlePath:   assSubtitlePath, // Use generated ASS subtitles if available
 		Key:               song.Key,
 		Tempo:             song.Tempo,
 		BPM:               song.BPM,

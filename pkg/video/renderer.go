@@ -40,6 +40,7 @@ type VideoRenderOptions struct {
 	VocalOnset        float64 // Offset for lyrics timing (in seconds)
 	CrossfadeDuration float64 // Duration of crossfade between images (default 2.0s)
 	EnableKaraoke     bool    // Enable word-by-word karaoke highlighting (default false)
+	ASSSubtitlePath   string  // Path to ASS subtitle file for karaoke (optional)
 
 	// Metadata
 	Key    string
@@ -769,6 +770,12 @@ func (vr *VideoRenderer) addBrandingOverlays(inputPath string, opts *VideoRender
 func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOptions) (string, error) {
 	tempPath := filepath.Join(vr.TempDir, "with_lyrics.mp4")
 
+	// If ASS subtitle file is provided, use it for karaoke
+	if opts.ASSSubtitlePath != "" && fileExists(opts.ASSSubtitlePath) {
+		log.Printf("Using ASS karaoke subtitles: %s", opts.ASSSubtitlePath)
+		return vr.addASSSubtitles(inputPath, opts.ASSSubtitlePath, tempPath)
+	}
+
 	if len(opts.LyricsData) == 0 {
 		// No lyrics, just copy
 		return vr.copyVideo(inputPath, tempPath)
@@ -1116,4 +1123,35 @@ func escapeText(text string) string {
 	text = strings.ReplaceAll(text, "'", "\\'")
 	text = strings.ReplaceAll(text, ":", "\\:")
 	return text
+}
+
+// addASSSubtitles adds ASS karaoke subtitles to the video
+func (vr *VideoRenderer) addASSSubtitles(inputPath, assPath, outputPath string) (string, error) {
+	log.Printf("Adding ASS subtitles from: %s", assPath)
+
+	// Use FFmpeg subtitles filter to burn in ASS subtitles
+	// This properly handles karaoke effects defined in the ASS file
+	cmd := exec.Command("ffmpeg",
+		"-i", inputPath,
+		"-vf", fmt.Sprintf("subtitles=%s", assPath),
+		"-c:v", "libx264",
+		"-preset", "medium",
+		"-crf", "23",
+		"-y",
+		outputPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg ASS subtitle overlay failed: %w\nOutput: %s", err, string(output))
+	}
+
+	log.Println("✓ ASS karaoke subtitles added successfully")
+	return outputPath, nil
+}
+
+// fileExists checks if a file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
