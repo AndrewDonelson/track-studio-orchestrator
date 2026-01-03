@@ -23,8 +23,8 @@ type VideoRenderer struct {
 	MaxTimingSamples int
 }
 
-// Timing adjustment constant (user feedback: offset is 1.5s too slow)
-const TimingAdjustment = -1.5
+// Note: Removed TimingAdjustment constant - caused progressive timing drift
+// Using accurate vocal onset timing instead
 
 // VideoRenderOptions contains all parameters for video rendering
 type VideoRenderOptions struct {
@@ -39,6 +39,7 @@ type VideoRenderOptions struct {
 	LyricsData        []LyricLine
 	VocalOnset        float64 // Offset for lyrics timing (in seconds)
 	CrossfadeDuration float64 // Duration of crossfade between images (default 2.0s)
+	EnableKaraoke     bool    // Enable word-by-word karaoke highlighting (default false)
 
 	// Metadata
 	Key    string
@@ -293,6 +294,13 @@ func (vr *VideoRenderer) addMetadataOverlay(inputPath string, opts *VideoRenderO
 func (vr *VideoRenderer) addBrandingOverlays(inputPath string, opts *VideoRenderOptions) (string, error) {
 	tempPath := filepath.Join(vr.TempDir, "with_branding.mp4")
 
+	// Check if artist logo exists
+	logoPath := filepath.Join("storage", "branding", "artist-logo.png")
+	logoExists := false
+	if _, err := os.Stat(logoPath); err == nil {
+		logoExists = true
+	}
+
 	// Build filter for title (bottom left), copyright (bottom center), and logo (bottom right)
 	var filterParts []string
 
@@ -311,20 +319,35 @@ func (vr *VideoRenderer) addBrandingOverlays(inputPath string, opts *VideoRender
 
 	filterStr := strings.Join(filterParts, "")
 
-	// If there's a brand logo, we need to overlay it separately using movie filter
-	// For now, text only (logo would require movie filter which is more complex)
-	// TODO: Add logo overlay if brand_logo_path is available
-
-	cmd := exec.Command("ffmpeg",
-		"-i", inputPath,
-		"-vf", filterStr,
-		"-c:v", "libx264",
-		"-preset", "medium",
-		"-crf", "23",
-		"-c:a", "copy",
-		"-y",
-		tempPath,
-	)
+	// Build FFmpeg command with logo overlay if it exists
+	var cmd *exec.Cmd
+	if logoExists {
+		// Use overlay filter to add logo (150x150, bottom-right, 20px margins)
+		// Note: At this stage, there's no audio yet (added later in addAudio step)
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-i", logoPath,
+			"-filter_complex",
+			fmt.Sprintf("[0:v]%s[v1];[1:v]scale=150:150[logo];[v1][logo]overlay=W-w-20:H-h-20[vout]", filterStr),
+			"-map", "[vout]",
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			tempPath,
+		)
+	} else {
+		// No logo, just text overlays
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-vf", filterStr,
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			tempPath,
+		)
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -358,8 +381,9 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 	var filterParts []string
 
 	for i, lyric := range opts.LyricsData {
-		startTime := lyric.StartTime + vocalOnset + TimingAdjustment
-		endTime := lyric.EndTime + vocalOnset + TimingAdjustment
+		// Use accurate timing: vocal onset + lyric times (no manual adjustment)
+		startTime := lyric.StartTime + vocalOnset
+		endTime := lyric.EndTime + vocalOnset
 		duration := endTime - startTime
 
 		// Estimate word-level timing by dividing duration evenly
@@ -370,25 +394,48 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 
 		wordDuration := duration / float64(len(words))
 
-		// Current line - white base text (100% opacity, full duration)
+		fullText := escapeText(lyric.Text)
+
+		// SOLUTION: Use expression to calculate fixed X position where centered text starts
+		// Then render both white and yellow left-aligned from that position
+		// Expression: X_start = (width - full_text_width) / 2
+		// In FFmpeg: We render full white centered, then yellow cumulative from same start X
+
+		// Base layer: Full white text, centered by calculating start position
+		// Use x=(w-text_w)/2 which centers the full line
 		baseFilter := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=52:fontcolor=white:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:shadowcolor=black@0.8:shadowx=3:shadowy=3:enable=between(t\\,%.2f\\,%.2f)",
-			escapeText(lyric.Text), centerY, startTime, endTime)
+			fullText, centerY, startTime, endTime)
 		filterParts = append(filterParts, baseFilter)
 
-		// Word-by-word yellow highlight
-		for wordIdx, word := range words {
-			wordStartTime := startTime + float64(wordIdx)*wordDuration
-			wordEndTime := wordStartTime + wordDuration
+		// Karaoke highlighting (optional)
+		if opts.EnableKaraoke {
+			// Karaoke layer: Build cumulative yellow text word by word
+			// Use same X calculation as white text to ensure alignment
+			// Key: Don't center the cumulative text itself - position it at the same X as full white text
+			//
+			// Approach: Calculate fixed X position using full text width, apply to all yellow renders
+			// FFmpeg limitation: Can't reference text_w of other drawtext in same filter
+			//
+			// Working solution: Render full line ghost in yellow to get positioning, then clip
+			// Or: Use fixed X value calculated from estimated full line width
+			//
+			// Best practical solution: Estimate full line width, calculate center X, render cumulative from there
+			estimatedCharWidth := 28.0 // DejaVu Sans Bold 52pt average
+			estimatedFullWidth := float64(len(lyric.Text)) * estimatedCharWidth
+			baseXPos := (float64(vr.Width) - estimatedFullWidth) / 2.0
 
-			// Calculate cumulative text to determine position
-			preText := strings.Join(words[:wordIdx], " ")
-			if preText != "" {
-				preText += " "
+			for wordIdx := range words {
+				wordStartTime := startTime + float64(wordIdx)*wordDuration
+				wordEndTime := wordStartTime + wordDuration
+
+				cumulativeWords := words[:wordIdx+1]
+				cumulativeText := escapeText(strings.Join(cumulativeWords, " "))
+
+				// Render cumulative text at fixed base X (left-aligned from center point)
+				wordHighlight := fmt.Sprintf("drawtext=text='%s':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:fontsize=52:x=%.0f:y=%d:fontcolor=yellow:enable=between(t\\,%.2f\\,%.2f)",
+					cumulativeText, baseXPos, centerY, wordStartTime, wordEndTime)
+				filterParts = append(filterParts, wordHighlight)
 			}
-
-			wordHighlight := fmt.Sprintf("drawtext=text='%s':x=(w-text_w)/2:y=%d:fontsize=52:fontcolor=yellow:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:enable=between(t\\,%.2f\\,%.2f)",
-				escapeText(preText+word), centerY, wordStartTime, wordEndTime)
-			filterParts = append(filterParts, wordHighlight)
 		}
 
 		// Preview line (next line at 50% opacity)
@@ -403,14 +450,15 @@ func (vr *VideoRenderer) addLyricsOverlay(inputPath string, opts *VideoRenderOpt
 
 	// Add progress indicator for intro (non-vocal sections)
 	if vocalOnset > 2.0 {
-		progressBarY := centerY - 50
+		// Position at 25% from bottom (centered)
+		progressBarY := int(float64(vr.Height) * 0.75)
 		progressWidth := 600
-		progressFilter := fmt.Sprintf("drawbox=x=(w-%d)/2:y=%d:w=%d*min(1\\,t/%.2f):h=4:color=yellow@0.8:enable=lt(t\\,%.2f)",
-			progressWidth, progressBarY, progressWidth, vocalOnset+TimingAdjustment, vocalOnset+TimingAdjustment)
+		progressFilter := fmt.Sprintf("drawbox=x=(w-%d)/2:y=%d:w=%d*min(1\\,t/%.2f):h=6:color=yellow:enable=lt(t\\,%.2f)",
+			progressWidth, progressBarY, progressWidth, vocalOnset, vocalOnset)
 		filterParts = append(filterParts, progressFilter)
 
-		countdownFilter := fmt.Sprintf("drawtext=text='Starting in %%{eif\\:max(0\\,%.2f-t)\\:d}s':x=(w-text_w)/2:y=%d:fontsize=32:fontcolor=white@0.7:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:enable=lt(t\\,%.2f)",
-			vocalOnset+TimingAdjustment, progressBarY-40, vocalOnset+TimingAdjustment)
+		countdownFilter := fmt.Sprintf("drawtext=text='Starting in %%{eif\\:max(0\\,%.2f-t)\\:d}s':x=(w-text_w)/2:y=%d:fontsize=36:fontcolor=yellow:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:enable=lt(t\\,%.2f)",
+			vocalOnset, progressBarY-40, vocalOnset)
 		filterParts = append(filterParts, countdownFilter)
 	}
 

@@ -372,7 +372,8 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 		ImagePaths:        imageSegments,
 		LyricsData:        timedLyrics,
 		VocalOnset:        vocalOnset,
-		CrossfadeDuration: 2.0, // 2 second crossfade between images
+		CrossfadeDuration: 2.0,   // 2 second crossfade between images
+		EnableKaraoke:     false, // Karaoke highlighting disabled by default
 		Key:               song.Key,
 		Tempo:             song.Tempo,
 		BPM:               song.BPM,
