@@ -112,6 +112,38 @@ func (h *QueueHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
+// Delete removes a queue item and cleans up associated files
+func (h *QueueHandler) Delete(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	// Get the item first to broadcast cancellation
+	item, err := h.repo.GetByID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if item == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Queue item not found"})
+		return
+	}
+
+	// Delete from database
+	if err := h.repo.Delete(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Broadcast cancellation
+	h.broadcaster.BroadcastFromQueueItem(item, "Queue item cancelled")
+
+	c.JSON(http.StatusOK, gin.H{"message": "Queue item deleted"})
+}
+
 // GetNext returns the next pending queue item
 func (h *QueueHandler) GetNext(c *gin.Context) {
 	item, err := h.repo.GetNextPending()

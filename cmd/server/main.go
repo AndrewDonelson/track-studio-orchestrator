@@ -68,7 +68,8 @@ func main() {
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Add("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Add("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Writer.Header().Add("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Writer.Header().Add("Access-Control-Allow-Headers", "Content-Type, Authorization, Cache-Control, Accept")
+		c.Writer.Header().Add("Access-Control-Expose-Headers", "Content-Type, Cache-Control, Connection")
 		c.Writer.Header().Add("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == "OPTIONS" {
@@ -86,6 +87,13 @@ func main() {
 			"service": "track-studio-orchestrator",
 		})
 	})
+
+	// Serve static video files
+	homeDir, _ := os.UserHomeDir()
+	basePath := filepath.Join(homeDir, "Development", "Fullstack-Projects", "TrackStudio", "track-studio-orchestrator")
+	videosPath := filepath.Join(basePath, "bin", "storage", "videos")
+	router.Static("/videos", videosPath)
+	log.Printf("Serving videos from: %s", videosPath)
 
 	// API v1 group
 	v1 := router.Group("/api/v1")
@@ -108,6 +116,7 @@ func main() {
 			queue.GET("/next", queueHandler.GetNext)
 			queue.GET("/:id", queueHandler.GetByID)
 			queue.PUT("/:id", queueHandler.Update)
+			queue.DELETE("/:id", queueHandler.Delete)
 		}
 
 		// Progress streaming endpoints (SSE)

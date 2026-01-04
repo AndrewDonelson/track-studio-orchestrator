@@ -120,6 +120,12 @@ func (r *QueueRepository) Update(item *models.QueueItem) error {
 	return err
 }
 
+// Delete removes a queue item
+func (r *QueueRepository) Delete(id int) error {
+	_, err := r.db.Exec("DELETE FROM queue WHERE id=?", id)
+	return err
+}
+
 // GetNextPending returns the next pending queue item
 func (r *QueueRepository) GetNextPending() (*models.QueueItem, error) {
 	query := `SELECT id, song_id, status, priority,
