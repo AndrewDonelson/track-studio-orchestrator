@@ -128,6 +128,7 @@ func main() {
 			queue.GET("/:id", queueHandler.GetByID)
 			queue.PUT("/:id", queueHandler.Update)
 			queue.DELETE("/:id", queueHandler.Delete)
+			queue.PUT("/:id/flag", queueHandler.UpdateFlag)
 		}
 
 		// Progress streaming endpoints (SSE)

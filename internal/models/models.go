@@ -79,6 +79,8 @@ type QueueItem struct {
 	VideoFileSize int64  `json:"video_file_size" db:"video_file_size"`
 	ThumbnailPath string `json:"thumbnail_path" db:"thumbnail_path"`
 
+	Flag *string `json:"flag" db:"flag"` // User-reported issue: image_issue, lyrics_issue, timing_issue
+
 	QueuedAt    time.Time  `json:"queued_at" db:"queued_at"`
 	StartedAt   *time.Time `json:"started_at" db:"started_at"`
 	CompletedAt *time.Time `json:"completed_at" db:"completed_at"`

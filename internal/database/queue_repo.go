@@ -26,6 +26,7 @@ func (r *QueueRepository) GetAll() ([]models.QueueItem, error) {
 		COALESCE(video_file_path, '') as video_file_path, 
 		COALESCE(video_file_size, 0) as video_file_size, 
 		COALESCE(thumbnail_path, '') as thumbnail_path,
+		flag,
 		queued_at, started_at, completed_at
 		FROM queue ORDER BY priority DESC, queued_at ASC`
 
@@ -42,6 +43,7 @@ func (r *QueueRepository) GetAll() ([]models.QueueItem, error) {
 			&item.ID, &item.SongID, &item.Status, &item.Priority,
 			&item.CurrentStep, &item.Progress, &item.ErrorMessage, &item.RetryCount,
 			&item.VideoFilePath, &item.VideoFileSize, &item.ThumbnailPath,
+			&item.Flag,
 			&item.QueuedAt, &item.StartedAt, &item.CompletedAt,
 		)
 		if err != nil {
@@ -63,6 +65,7 @@ func (r *QueueRepository) GetByID(id int) (*models.QueueItem, error) {
 		COALESCE(video_file_path, '') as video_file_path, 
 		COALESCE(video_file_size, 0) as video_file_size, 
 		COALESCE(thumbnail_path, '') as thumbnail_path,
+		flag,
 		queued_at, started_at, completed_at
 		FROM queue WHERE id = ?`
 
@@ -71,6 +74,7 @@ func (r *QueueRepository) GetByID(id int) (*models.QueueItem, error) {
 		&item.ID, &item.SongID, &item.Status, &item.Priority,
 		&item.CurrentStep, &item.Progress, &item.ErrorMessage, &item.RetryCount,
 		&item.VideoFilePath, &item.VideoFileSize, &item.ThumbnailPath,
+		&item.Flag,
 		&item.QueuedAt, &item.StartedAt, &item.CompletedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -136,6 +140,7 @@ func (r *QueueRepository) GetNextPending() (*models.QueueItem, error) {
 		COALESCE(video_file_path, '') as video_file_path, 
 		COALESCE(video_file_size, 0) as video_file_size, 
 		COALESCE(thumbnail_path, '') as thumbnail_path,
+		flag,
 		queued_at, started_at, completed_at
 		FROM queue 
 		WHERE status = ?
@@ -147,6 +152,7 @@ func (r *QueueRepository) GetNextPending() (*models.QueueItem, error) {
 		&item.ID, &item.SongID, &item.Status, &item.Priority,
 		&item.CurrentStep, &item.Progress, &item.ErrorMessage, &item.RetryCount,
 		&item.VideoFilePath, &item.VideoFileSize, &item.ThumbnailPath,
+		&item.Flag,
 		&item.QueuedAt, &item.StartedAt, &item.CompletedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -157,4 +163,11 @@ func (r *QueueRepository) GetNextPending() (*models.QueueItem, error) {
 	}
 
 	return &item, nil
+}
+
+// UpdateFlag updates the flag field for a queue item
+func (r *QueueRepository) UpdateFlag(id int, flag *string) error {
+	query := `UPDATE queue SET flag = ? WHERE id = ?`
+	_, err := r.db.Exec(query, flag, id)
+	return err
 }

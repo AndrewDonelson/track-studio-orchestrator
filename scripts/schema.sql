@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS queue (
     video_file_size INTEGER,
     thumbnail_path TEXT,
     
+    flag TEXT, -- User-reported issues: 'image_issue', 'lyrics_issue', 'timing_issue', or NULL
+    
     queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,

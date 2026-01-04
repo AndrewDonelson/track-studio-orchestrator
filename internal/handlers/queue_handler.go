@@ -159,3 +159,41 @@ func (h *QueueHandler) GetNext(c *gin.Context) {
 
 	c.JSON(http.StatusOK, item)
 }
+
+// UpdateFlag updates the flag field for a queue item
+func (h *QueueHandler) UpdateFlag(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	var req struct {
+		Flag *string `json:"flag"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate flag value
+	if req.Flag != nil {
+		validFlags := map[string]bool{
+			"image_issue":  true,
+			"lyrics_issue": true,
+			"timing_issue": true,
+		}
+		if !validFlags[*req.Flag] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid flag value"})
+			return
+		}
+	}
+
+	if err := h.repo.UpdateFlag(id, req.Flag); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Flag updated"})
+}
