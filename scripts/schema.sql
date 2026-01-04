@@ -64,6 +64,16 @@ CREATE TABLE IF NOT EXISTS songs (
     target_resolution TEXT DEFAULT '4k',
     show_metadata BOOLEAN DEFAULT 1,  -- Show BPM, Key, Tempo at top
     
+    -- Karaoke customization
+    karaoke_font_family TEXT DEFAULT 'Arial',
+    karaoke_font_size INTEGER DEFAULT 96,
+    karaoke_primary_color TEXT DEFAULT '4169E1',  -- Royal Blue
+    karaoke_primary_border_color TEXT DEFAULT 'FFFFFF',  -- White
+    karaoke_highlight_color TEXT DEFAULT 'FFD700',  -- Gold
+    karaoke_highlight_border_color TEXT DEFAULT 'FFFFFF',  -- White
+    karaoke_alignment INTEGER DEFAULT 5,  -- 5=center, 2=bottom-center
+    karaoke_margin_bottom INTEGER DEFAULT 0,  -- Pixels from bottom
+    
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (album_id) REFERENCES albums(id)

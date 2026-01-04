@@ -70,6 +70,13 @@ func (p *Processor) Process(item *models.QueueItem, song *models.Song) error {
 
 // analyzeAudio performs audio analysis using librosa
 func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) error {
+	// Check if audio analysis already exists
+	if song.BPM > 0 && song.Key != "" && song.DurationSeconds > 0 {
+		log.Printf("Audio analysis already exists for song %s, skipping", song.Title)
+		p.updateProgress(item, "Analyzing audio", 20, fmt.Sprintf("Using existing analysis: %.1f BPM, %s", song.BPM, song.Key))
+		return nil
+	}
+
 	p.updateProgress(item, "Analyzing audio", 5, "Loading audio files")
 
 	// For BPM/tempo analysis, use instrumental track (more accurate rhythm detection)
@@ -378,22 +385,28 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		// Calculate progress (34% to 50%)
 		progress := 34 + ((i+1)*16)/totalSections
 
-		// Determine filename - ONE IMAGE PER SECTION TYPE (not per occurrence)
-		// All verses use "bg-verse.png", all choruses use "bg-chorus.png", etc.
+		// Determine filename - Each verse gets unique image, repeated sections share images
 		var filename string
 		switch section.Type {
 		case "verse":
-			filename = "bg-verse.png" // All verses share this image
+			// Each verse gets its own unique image
+			filename = fmt.Sprintf("bg-verse-%d.png", section.Number)
 		case "pre-chorus":
-			filename = "bg-prechorus.png"
+			// Pre-choruses share one image (they repeat the same lyrics)
+			filename = "bg-pre-chorus-1.png"
 		case "chorus":
-			filename = "bg-chorus.png"
+			// Choruses share one image (they repeat the same lyrics)
+			filename = "bg-chorus-1.png"
+		case "final-chorus":
+			// Final chorus gets its own image
+			filename = "bg-final-chorus-1.png"
 		case "bridge":
-			filename = "bg-bridge.png"
+			// Each bridge gets its own unique image
+			filename = fmt.Sprintf("bg-bridge-%d.png", section.Number)
 		case "intro":
 			filename = "bg-intro.png"
 		case "outro":
-			filename = "bg-outro.png"
+			filename = "bg-outro-1.png"
 		default:
 			filename = fmt.Sprintf("bg-%s.png", section.Type)
 		}
@@ -555,9 +568,26 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 		// Create karaoke generator
 		karaokeGen := lyrics.NewKaraokeGenerator(execDir)
 
+		// Prepare karaoke customization options from song settings
+		karaokeOptions := &lyrics.KaraokeOptions{
+			FontFamily:           song.KaraokeFontFamily,
+			FontSize:             song.KaraokeFontSize,
+			PrimaryColor:         song.KaraokePrimaryColor,
+			PrimaryBorderColor:   song.KaraokePrimaryBorderColor,
+			HighlightColor:       song.KaraokeHighlightColor,
+			HighlightBorderColor: song.KaraokeHighlightBorderColor,
+			Alignment:            song.KaraokeAlignment,
+			MarginBottom:         song.KaraokeMarginBottom,
+		}
+
+		// Use defaults if not set
+		if karaokeOptions.FontFamily == "" {
+			karaokeOptions = lyrics.DefaultKaraokeOptions()
+		}
+
 		// Generate ASS subtitles from vocals, using lyrics_karaoke for display
 		tempDir := filepath.Join(execDir, "storage", "temp")
-		assPath, err := karaokeGen.GenerateKaraokeSubtitles(song.VocalsStemPath, int(song.ID), tempDir, song.LyricsKaraoke)
+		assPath, err := karaokeGen.GenerateKaraokeSubtitles(song.VocalsStemPath, int(song.ID), tempDir, song.LyricsKaraoke, karaokeOptions)
 		if err != nil {
 			log.Printf("Warning: failed to generate karaoke subtitles: %v, using fallback lyrics", err)
 		} else {
@@ -630,17 +660,24 @@ func (p *Processor) buildImageSegments(lyricsData *lyrics.LyricsData, imageDir s
 		var imageName string
 		switch section.Type {
 		case "verse":
+			// Each verse has unique image
 			imageName = fmt.Sprintf("bg-verse-%d.png", section.Number)
 		case "pre-chorus":
-			imageName = "bg-prechorus.png"
+			// Pre-choruses share one image
+			imageName = "bg-pre-chorus-1.png"
 		case "chorus":
-			imageName = "bg-chorus.png"
+			// Choruses share one image
+			imageName = "bg-chorus-1.png"
+		case "final-chorus":
+			// Final chorus has its own image
+			imageName = "bg-final-chorus-1.png"
 		case "bridge":
-			imageName = "bg-bridge.png"
+			// Each bridge has unique image
+			imageName = fmt.Sprintf("bg-bridge-%d.png", section.Number)
 		case "intro":
 			imageName = "bg-intro.png"
 		case "outro":
-			imageName = "bg-outro.png"
+			imageName = "bg-outro-1.png"
 		default:
 			imageName = fmt.Sprintf("bg-%s.png", section.Type)
 		}

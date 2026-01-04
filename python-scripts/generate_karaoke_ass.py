@@ -9,14 +9,16 @@ from dataclasses import dataclass
 
 @dataclass
 class KaraokeConfig:
-    font_size: int = 96  # Increased from 48 to 96 (2x)
-    primary_color: str = "4169E1"  # Royal Blue (BGR format)
-    highlight_color: str = "FFD700"  # Gold (BGR format)
-    outline_width: int = 3
-    outline_color: str = "FFFFFF"  # White (BGR format)
-    shadow_depth: int = 2
-    margin_bottom: int = 60  # Bottom margin for better positioning
-    alignment: int = 2  # Bottom center
+    font_family: str = "Arial"  # Google font name
+    font_size: int = 96  # Font size in pixels
+    primary_color: str = "4169E1"  # Royal Blue (BGR format hex)
+    primary_border_color: str = "FFFFFF"  # White border (BGR format hex)
+    highlight_color: str = "FFD700"  # Gold highlight (BGR format hex)
+    highlight_border_color: str = "FFFFFF"  # White border (BGR format hex)
+    outline_width: int = 3  # Border thickness
+    shadow_depth: int = 2  # Shadow depth
+    margin_bottom: int = 0  # Bottom margin in pixels
+    alignment: int = 5  # 5=center, 2=bottom-center, 8=top-center
     max_chars_per_line: int = 45  # Maximum characters per line to prevent clipping
 
 def hex_to_ass_color(hex_color):
@@ -84,7 +86,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,{config.font_size},{hex_to_ass_color(config.primary_color)},{hex_to_ass_color(config.highlight_color)},{hex_to_ass_color(config.outline_color)},&H80000000&,-1,0,0,0,100,100,0,0,1,{config.outline_width},{config.shadow_depth},{config.alignment},50,50,{config.margin_bottom},1
+Style: Karaoke,{config.font_family},{config.font_size},{hex_to_ass_color(config.primary_color)},{hex_to_ass_color(config.highlight_color)},{hex_to_ass_color(config.primary_border_color)},&H80000000&,-1,0,0,0,100,100,0,0,1,{config.outline_width},{config.shadow_depth},{config.alignment},50,50,{config.margin_bottom},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -162,7 +164,16 @@ def main():
     parser.add_argument('--timestamps', required=True, help='Input timestamps JSON file')
     parser.add_argument('--output', required=True, help='Output ASS file')
     parser.add_argument('--lyrics', help='Optional: Actual lyrics file (uses real lyrics instead of Whisper transcription)')
+    
+    # Karaoke customization options
+    parser.add_argument('--font-family', default='Arial', help='Font family (default: Arial)')
     parser.add_argument('--font-size', type=int, default=96, help='Font size (default: 96)')
+    parser.add_argument('--primary-color', default='4169E1', help='Primary text color in hex (default: 4169E1 - Royal Blue)')
+    parser.add_argument('--primary-border-color', default='FFFFFF', help='Primary border color in hex (default: FFFFFF - White)')
+    parser.add_argument('--highlight-color', default='FFD700', help='Highlight color in hex (default: FFD700 - Gold)')
+    parser.add_argument('--highlight-border-color', default='FFFFFF', help='Highlight border color in hex (default: FFFFFF - White)')
+    parser.add_argument('--alignment', type=int, default=5, help='Text alignment: 1-9 (5=center, 2=bottom-center, default: 5)')
+    parser.add_argument('--margin-bottom', type=int, default=0, help='Bottom margin in pixels (default: 0)')
     parser.add_argument('--max-chars', type=int, default=45, help='Max characters per line (default: 45)')
     
     args = parser.parse_args()
@@ -174,7 +185,17 @@ def main():
             with open(args.lyrics, 'r', encoding='utf-8') as f:
                 lyrics_text = f.read()
         
-        config = KaraokeConfig(font_size=args.font_size, max_chars_per_line=args.max_chars)
+        config = KaraokeConfig(
+            font_family=args.font_family,
+            font_size=args.font_size,
+            primary_color=args.primary_color,
+            primary_border_color=args.primary_border_color,
+            highlight_color=args.highlight_color,
+            highlight_border_color=args.highlight_border_color,
+            alignment=args.alignment,
+            margin_bottom=args.margin_bottom,
+            max_chars_per_line=args.max_chars
+        )
         create_karaoke_ass(args.timestamps, args.output, lyrics_text, config)
         sys.exit(0)
     except Exception as e:

@@ -62,6 +62,16 @@ type Song struct {
 	SpectrumOpacity  float64 `json:"spectrum_opacity" db:"spectrum_opacity"` // Opacity: 0.0-1.0
 	TargetResolution string  `json:"target_resolution" db:"target_resolution"`
 	ShowMetadata     bool    `json:"show_metadata" db:"show_metadata"`
+
+	// Karaoke customization
+	KaraokeFontFamily           string `json:"karaoke_font_family" db:"karaoke_font_family"`
+	KaraokeFontSize             int    `json:"karaoke_font_size" db:"karaoke_font_size"`
+	KaraokePrimaryColor         string `json:"karaoke_primary_color" db:"karaoke_primary_color"`
+	KaraokePrimaryBorderColor   string `json:"karaoke_primary_border_color" db:"karaoke_primary_border_color"`
+	KaraokeHighlightColor       string `json:"karaoke_highlight_color" db:"karaoke_highlight_color"`
+	KaraokeHighlightBorderColor string `json:"karaoke_highlight_border_color" db:"karaoke_highlight_border_color"`
+	KaraokeAlignment            int    `json:"karaoke_alignment" db:"karaoke_alignment"`
+	KaraokeMarginBottom         int    `json:"karaoke_margin_bottom" db:"karaoke_margin_bottom"`
 }
 
 // QueueItem represents a job in the processing queue

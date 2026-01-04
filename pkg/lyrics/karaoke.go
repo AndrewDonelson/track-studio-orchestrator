@@ -9,6 +9,32 @@ import (
 	"path/filepath"
 )
 
+// KaraokeOptions holds customization settings for karaoke subtitles
+type KaraokeOptions struct {
+	FontFamily           string
+	FontSize             int
+	PrimaryColor         string
+	PrimaryBorderColor   string
+	HighlightColor       string
+	HighlightBorderColor string
+	Alignment            int
+	MarginBottom         int
+}
+
+// DefaultKaraokeOptions returns default karaoke settings
+func DefaultKaraokeOptions() *KaraokeOptions {
+	return &KaraokeOptions{
+		FontFamily:           "Arial",
+		FontSize:             96,
+		PrimaryColor:         "4169E1", // Royal Blue
+		PrimaryBorderColor:   "FFFFFF", // White
+		HighlightColor:       "FFD700", // Gold
+		HighlightBorderColor: "FFFFFF", // White
+		Alignment:            5,        // Center
+		MarginBottom:         0,
+	}
+}
+
 // KaraokeGenerator handles word-level timestamp generation and ASS subtitle creation
 type KaraokeGenerator struct {
 	PythonPath   string
@@ -111,8 +137,12 @@ func (kg *KaraokeGenerator) GenerateTimestamps(vocalsPath string, outputJSON str
 
 // GenerateASSFile generates an ASS subtitle file with karaoke effects
 // If lyricsKaraoke is provided, uses actual lyrics instead of Whisper transcription
-func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS string, lyricsKaraoke string) error {
+func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS string, lyricsKaraoke string, options *KaraokeOptions) error {
 	log.Printf("Generating ASS subtitles from: %s", timestampsJSON)
+
+	if options == nil {
+		options = DefaultKaraokeOptions()
+	}
 
 	// Ensure output directory exists
 	if err := os.MkdirAll(filepath.Dir(outputASS), 0755); err != nil {
@@ -124,7 +154,14 @@ func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS str
 		filepath.Join(kg.ScriptsDir, "generate_karaoke_ass.py"),
 		"--timestamps", timestampsJSON,
 		"--output", outputASS,
-		"--font-size", "96", // Increased from 48 to 96 (2x)
+		"--font-family", options.FontFamily,
+		"--font-size", fmt.Sprintf("%d", options.FontSize),
+		"--primary-color", options.PrimaryColor,
+		"--primary-border-color", options.PrimaryBorderColor,
+		"--highlight-color", options.HighlightColor,
+		"--highlight-border-color", options.HighlightBorderColor,
+		"--alignment", fmt.Sprintf("%d", options.Alignment),
+		"--margin-bottom", fmt.Sprintf("%d", options.MarginBottom),
 	}
 
 	// If lyrics_karaoke is provided, write to temp file and pass to script
@@ -151,7 +188,7 @@ func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS str
 
 // GenerateKaraokeSubtitles is the complete pipeline: vocals → timestamps → ASS
 // If lyricsKaraoke is provided, uses actual lyrics for display instead of Whisper transcription
-func (kg *KaraokeGenerator) GenerateKaraokeSubtitles(vocalsPath string, songID int, workingDir string, lyricsKaraoke string) (string, error) {
+func (kg *KaraokeGenerator) GenerateKaraokeSubtitles(vocalsPath string, songID int, workingDir string, lyricsKaraoke string, options *KaraokeOptions) (string, error) {
 	// Define output paths
 	timestampsJSON := filepath.Join(workingDir, fmt.Sprintf("song_%d_timestamps.json", songID))
 	assPath := filepath.Join(workingDir, fmt.Sprintf("song_%d_karaoke.ass", songID))
@@ -163,7 +200,7 @@ func (kg *KaraokeGenerator) GenerateKaraokeSubtitles(vocalsPath string, songID i
 	}
 
 	// Step 2: Generate ASS file (with actual lyrics if provided)
-	err = kg.GenerateASSFile(timestampsJSON, assPath, lyricsKaraoke)
+	err = kg.GenerateASSFile(timestampsJSON, assPath, lyricsKaraoke, options)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate ASS file: %w", err)
 	}
