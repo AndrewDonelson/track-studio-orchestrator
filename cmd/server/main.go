@@ -51,6 +51,7 @@ func main() {
 	songHandler := handlers.NewSongHandler(songRepo)
 	queueHandler := handlers.NewQueueHandler(queueRepo, broadcaster)
 	progressHandler := handlers.NewProgressHandler(broadcaster, queueRepo)
+	imageHandler := handlers.NewImageHandler()
 
 	// Create and start queue worker
 	queueWorker := worker.NewWorker(queueRepo, songRepo, broadcaster, 5*time.Second)
@@ -106,6 +107,16 @@ func main() {
 			songs.POST("", songHandler.Create)
 			songs.PUT("/:id", songHandler.Update)
 			songs.DELETE("/:id", songHandler.Delete)
+
+			// Image endpoints for songs
+			songs.GET("/:id/images", imageHandler.GetImagesBySong)
+		}
+
+		// Images endpoints
+		images := v1.Group("/images")
+		{
+			images.PUT("/:id/prompt", imageHandler.UpdateImagePrompt)
+			images.POST("/:id/regenerate", imageHandler.RegenerateImage)
 		}
 
 		// Queue endpoints

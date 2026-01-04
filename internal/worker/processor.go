@@ -276,6 +276,23 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		generatedImages[filename] = imagePath
 		imagePaths = append(imagePaths, imagePath)
 		log.Printf("Generated image %d/%d: %s", len(generatedImages), totalSections, imagePath)
+
+		// Store image in database
+		genImage := &models.GeneratedImage{
+			SongID:         song.ID,
+			QueueID:        &item.ID,
+			ImagePath:      imagePath,
+			Prompt:         "", // TODO: Get actual prompt from imageGen
+			NegativePrompt: "",
+			ImageType:      section.Type,
+			SequenceNumber: &section.Number,
+			Width:          1920,
+			Height:         1080,
+			Model:          "cqai",
+		}
+		if err := database.CreateGeneratedImage(genImage); err != nil {
+			log.Printf("Warning: failed to store image record in database: %v", err)
+		}
 	}
 
 	p.updateProgress(item, "Generating images", 50,
@@ -284,8 +301,6 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 
 	log.Printf("Image generation complete for song: %s - Generated %d unique images",
 		song.Title, len(generatedImages))
-
-	// TODO: Store image paths in database (new field: image_paths JSON)
 
 	return nil
 }

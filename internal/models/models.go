@@ -114,6 +114,22 @@ type ProcessingLog struct {
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
 }
 
+// GeneratedImage represents an AI-generated image with its prompt
+type GeneratedImage struct {
+	ID             int       `json:"id" db:"id"`
+	SongID         int       `json:"song_id" db:"song_id"`
+	QueueID        *int      `json:"queue_id" db:"queue_id"`
+	ImagePath      string    `json:"image_path" db:"image_path"`
+	Prompt         string    `json:"prompt" db:"prompt"`
+	NegativePrompt string    `json:"negative_prompt" db:"negative_prompt"`
+	ImageType      string    `json:"image_type" db:"image_type"` // background, scene, thumbnail
+	SequenceNumber *int      `json:"sequence_number" db:"sequence_number"`
+	Width          int       `json:"width" db:"width"`
+	Height         int       `json:"height" db:"height"`
+	Model          string    `json:"model" db:"model"`
+	CreatedAt      time.Time `json:"created_at" db:"created_at"`
+}
+
 // Queue status constants
 const (
 	StatusQueued     = "queued"

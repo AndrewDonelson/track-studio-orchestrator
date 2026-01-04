@@ -130,9 +130,32 @@ CREATE TABLE IF NOT EXISTS processing_logs (
     FOREIGN KEY (queue_id) REFERENCES queue(id)
 );
 
+-- Generated images table for tracking AI-generated images
+CREATE TABLE IF NOT EXISTS generated_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    song_id INTEGER NOT NULL,
+    queue_id INTEGER,
+    
+    image_path TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    negative_prompt TEXT,
+    image_type TEXT NOT NULL, -- 'background', 'scene', 'thumbnail', etc.
+    sequence_number INTEGER, -- For ordering scene images
+    
+    width INTEGER,
+    height INTEGER,
+    model TEXT, -- AI model used
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (song_id) REFERENCES songs(id),
+    FOREIGN KEY (queue_id) REFERENCES queue(id)
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_songs_album ON songs(album_id);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);
 CREATE INDEX IF NOT EXISTS idx_queue_song ON queue(song_id);
 CREATE INDEX IF NOT EXISTS idx_youtube_video_id ON youtube_uploads(youtube_video_id);
 CREATE INDEX IF NOT EXISTS idx_logs_queue ON processing_logs(queue_id);
+CREATE INDEX IF NOT EXISTS idx_images_song ON generated_images(song_id);
+CREATE INDEX IF NOT EXISTS idx_images_queue ON generated_images(queue_id);
