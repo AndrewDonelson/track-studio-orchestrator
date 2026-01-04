@@ -110,7 +110,8 @@ func (kg *KaraokeGenerator) GenerateTimestamps(vocalsPath string, outputJSON str
 }
 
 // GenerateASSFile generates an ASS subtitle file with karaoke effects
-func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS string) error {
+// If lyricsKaraoke is provided, uses actual lyrics instead of Whisper transcription
+func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS string, lyricsKaraoke string) error {
 	log.Printf("Generating ASS subtitles from: %s", timestampsJSON)
 
 	// Ensure output directory exists
@@ -118,13 +119,26 @@ func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS str
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	cmd := exec.Command(
-		kg.PythonPath,
+	// Prepare command arguments
+	cmdArgs := []string{
 		filepath.Join(kg.ScriptsDir, "generate_karaoke_ass.py"),
 		"--timestamps", timestampsJSON,
 		"--output", outputASS,
-		"--font-size", "48",
-	)
+		"--font-size", "96", // Increased from 48 to 96 (2x)
+	}
+
+	// If lyrics_karaoke is provided, write to temp file and pass to script
+	if lyricsKaraoke != "" {
+		lyricsFile := filepath.Join(filepath.Dir(outputASS), "lyrics_temp.txt")
+		if err := os.WriteFile(lyricsFile, []byte(lyricsKaraoke), 0644); err != nil {
+			log.Printf("Warning: failed to write lyrics file: %v", err)
+		} else {
+			cmdArgs = append(cmdArgs, "--lyrics", lyricsFile)
+			defer os.Remove(lyricsFile) // Clean up temp file
+		}
+	}
+
+	cmd := exec.Command(kg.PythonPath, cmdArgs...)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -136,19 +150,20 @@ func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS str
 }
 
 // GenerateKaraokeSubtitles is the complete pipeline: vocals → timestamps → ASS
-func (kg *KaraokeGenerator) GenerateKaraokeSubtitles(vocalsPath string, songID int, workingDir string) (string, error) {
+// If lyricsKaraoke is provided, uses actual lyrics for display instead of Whisper transcription
+func (kg *KaraokeGenerator) GenerateKaraokeSubtitles(vocalsPath string, songID int, workingDir string, lyricsKaraoke string) (string, error) {
 	// Define output paths
 	timestampsJSON := filepath.Join(workingDir, fmt.Sprintf("song_%d_timestamps.json", songID))
 	assPath := filepath.Join(workingDir, fmt.Sprintf("song_%d_karaoke.ass", songID))
 
-	// Step 1: Generate timestamps
+	// Step 1: Generate timestamps (uses Whisper for timing only)
 	_, err := kg.GenerateTimestamps(vocalsPath, timestampsJSON)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate timestamps: %w", err)
 	}
 
-	// Step 2: Generate ASS file
-	err = kg.GenerateASSFile(timestampsJSON, assPath)
+	// Step 2: Generate ASS file (with actual lyrics if provided)
+	err = kg.GenerateASSFile(timestampsJSON, assPath, lyricsKaraoke)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate ASS file: %w", err)
 	}

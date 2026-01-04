@@ -263,7 +263,7 @@ func (ig *ImageGenerator) GenerateImage(prompt, outputFilename string) (string, 
 	return outputPath, nil
 }
 
-func (ig *ImageGenerator) GenerateFromSection(sectionType string, sectionNumber int, lyrics, styleKeywords string) (string, error) {
+func (ig *ImageGenerator) GenerateFromSection(sectionType string, sectionNumber int, lyrics, styleKeywords string) (string, string, error) {
 	var filename string
 	switch sectionType {
 	case "verse":
@@ -284,13 +284,14 @@ func (ig *ImageGenerator) GenerateFromSection(sectionType string, sectionNumber 
 
 	outputPath := filepath.Join(ig.OutputDir, filename)
 	if _, err := os.Stat(outputPath); err == nil {
-		return outputPath, nil
+		// Return empty prompt for existing images
+		return outputPath, "", nil
 	}
 
 	fmt.Printf("Enhancing prompt for %s %d with LLM...\n", sectionType, sectionNumber)
 	enhancedPrompt, err := ig.EnhancePromptWithLLM(sectionType, lyrics, styleKeywords)
 	if err != nil {
-		return "", fmt.Errorf("failed to enhance prompt: %w", err)
+		return "", "", fmt.Errorf("failed to enhance prompt: %w", err)
 	}
 
 	promptPreview := enhancedPrompt
@@ -302,11 +303,11 @@ func (ig *ImageGenerator) GenerateFromSection(sectionType string, sectionNumber 
 	fmt.Printf("Generating image for %s %d...\n", sectionType, sectionNumber)
 	imagePath, err := ig.GenerateImage(enhancedPrompt, filename)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate image: %w", err)
+		return "", "", fmt.Errorf("failed to generate image: %w", err)
 	}
 
 	fmt.Printf("Image saved: %s\n", imagePath)
-	return imagePath, nil
+	return imagePath, enhancedPrompt, nil
 }
 
 // GetAverageLLMTime returns the average time for LLM prompt enhancement
@@ -382,4 +383,77 @@ func BuildStyleKeywords(genre, backgroundStyle string) string {
 	}
 
 	return strings.Join(keywords, ", ")
+}
+
+// VisionLLMRequest for image analysis with vision models
+type VisionLLMRequest struct {
+	Model  string   `json:"model"`
+	Prompt string   `json:"prompt"`
+	Images []string `json:"images"` // base64 encoded images
+	Stream bool     `json:"stream"`
+}
+
+// ExtractPromptFromImage uses a vision model to reverse-engineer a prompt from an existing image
+func (ig *ImageGenerator) ExtractPromptFromImage(imagePath string) (string, error) {
+	// Read and encode image to base64
+	imageData, err := os.ReadFile(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read image: %w", err)
+	}
+
+	base64Image := base64.StdEncoding.EncodeToString(imageData)
+
+	// System prompt for reverse-engineering image prompts
+	visionPrompt := `Analyze this image and create a detailed prompt that could regenerate a similar image. 
+
+CRITICAL RULES:
+1. Describe EXACTLY what you see in the image
+2. Include: scene composition, subjects, lighting, colors, mood, camera angle
+3. Be extremely specific and detailed (150-200 words)
+4. Use photography terminology
+5. Format as a single continuous prompt suitable for image generation
+6. DO NOT include any preamble or explanation - output ONLY the prompt
+
+STRUCTURE:
+[Subject and scene] at [location], [lighting description], [mood/atmosphere], [color palette], [camera/composition details], photorealistic, professional photography, 8K resolution, ultra detailed, sharp focus, cinematic composition`
+
+	req := VisionLLMRequest{
+		Model:  "llama3.2-vision:11b", // Ollama vision model
+		Prompt: visionPrompt,
+		Images: []string{base64Image},
+		Stream: false,
+	}
+
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal vision request: %w", err)
+	}
+
+	// Call Ollama API with vision support
+	resp, err := http.Post(ig.LLMURL+"/api/generate", "application/json", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("vision API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read vision response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("vision API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var llmResp LLMResponse
+	if err := json.Unmarshal(body, &llmResp); err != nil {
+		return "", fmt.Errorf("failed to parse vision response: %w", err)
+	}
+
+	prompt := strings.TrimSpace(llmResp.Response)
+	if prompt == "" {
+		return "", fmt.Errorf("vision model returned empty prompt")
+	}
+
+	return prompt, nil
 }

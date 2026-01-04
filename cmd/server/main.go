@@ -52,6 +52,8 @@ func main() {
 	queueHandler := handlers.NewQueueHandler(queueRepo, broadcaster)
 	progressHandler := handlers.NewProgressHandler(broadcaster, queueRepo)
 	imageHandler := handlers.NewImageHandler()
+	audioHandler := handlers.NewAudioHandler(songRepo)
+	uploadHandler := handlers.NewUploadHandler(songRepo)
 
 	// Create and start queue worker
 	queueWorker := worker.NewWorker(queueRepo, songRepo, broadcaster, 5*time.Second)
@@ -96,6 +98,11 @@ func main() {
 	router.Static("/videos", videosPath)
 	log.Printf("Serving videos from: %s", videosPath)
 
+	// Serve static image files
+	imagesPath := filepath.Join(basePath, "bin", "storage", "images")
+	router.Static("/images", imagesPath)
+	log.Printf("Serving images from: %s", imagesPath)
+
 	// API v1 group
 	v1 := router.Group("/api/v1")
 	{
@@ -110,11 +117,18 @@ func main() {
 
 			// Image endpoints for songs
 			songs.GET("/:id/images", imageHandler.GetImagesBySong)
+			songs.POST("/:id/images", imageHandler.CreateImagePrompt)
+			songs.DELETE("/:id/images", imageHandler.DeleteImagesBySong)
+
+			// Audio analysis endpoint
+			songs.POST("/:id/analyze", audioHandler.AnalyzeSong) // Audio upload endpoint
+			songs.POST("/:id/upload-audio", uploadHandler.UploadAudio)
 		}
 
 		// Images endpoints
 		images := v1.Group("/images")
 		{
+			images.POST("/generate-prompt", imageHandler.GeneratePromptFromLyrics)
 			images.PUT("/:id/prompt", imageHandler.UpdateImagePrompt)
 			images.POST("/:id/regenerate", imageHandler.RegenerateImage)
 		}

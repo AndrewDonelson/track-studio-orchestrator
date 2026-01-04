@@ -23,6 +23,7 @@ func (r *SongRepository) GetAll() ([]models.Song, error) {
 		COALESCE(mixed_audio_path, '') as mixed_audio_path, 
 		COALESCE(metadata_file_path, '') as metadata_file_path,
 		lyrics, 
+		COALESCE(lyrics_karaoke, '') as lyrics_karaoke,
 		COALESCE(lyrics_display, '') as lyrics_display, 
 		COALESCE(lyrics_sections, '') as lyrics_sections,
 		COALESCE(bpm, 0) as bpm, 
@@ -51,7 +52,7 @@ func (r *SongRepository) GetAll() ([]models.Song, error) {
 		err := rows.Scan(
 			&s.ID, &s.AlbumID, &s.Title, &s.ArtistName, &s.Genre,
 			&s.VocalsStemPath, &s.MusicStemPath, &s.MixedAudioPath, &s.MetadataPath,
-			&s.Lyrics, &s.LyricsDisplay, &s.LyricsSections,
+			&s.Lyrics, &s.LyricsKaraoke, &s.LyricsDisplay, &s.LyricsSections,
 			&s.BPM, &s.Key, &s.Tempo, &s.DurationSeconds, &s.VocalTiming,
 			&s.BrandLogoPath, &s.CopyrightText,
 			&s.BackgroundStyle, &s.SpectrumColor, &s.SpectrumOpacity, &s.TargetResolution,
@@ -73,6 +74,7 @@ func (r *SongRepository) GetByID(id int) (*models.Song, error) {
 		COALESCE(mixed_audio_path, '') as mixed_audio_path, 
 		COALESCE(metadata_file_path, '') as metadata_file_path,
 		lyrics, 
+		COALESCE(lyrics_karaoke, '') as lyrics_karaoke,
 		COALESCE(lyrics_display, '') as lyrics_display, 
 		COALESCE(lyrics_sections, '') as lyrics_sections,
 		COALESCE(bpm, 0) as bpm, 
@@ -93,7 +95,7 @@ func (r *SongRepository) GetByID(id int) (*models.Song, error) {
 	err := r.db.QueryRow(query, id).Scan(
 		&s.ID, &s.AlbumID, &s.Title, &s.ArtistName, &s.Genre,
 		&s.VocalsStemPath, &s.MusicStemPath, &s.MixedAudioPath, &s.MetadataPath,
-		&s.Lyrics, &s.LyricsDisplay, &s.LyricsSections,
+		&s.Lyrics, &s.LyricsKaraoke, &s.LyricsDisplay, &s.LyricsSections,
 		&s.BPM, &s.Key, &s.Tempo, &s.DurationSeconds, &s.VocalTiming,
 		&s.BrandLogoPath, &s.CopyrightText,
 		&s.BackgroundStyle, &s.SpectrumColor, &s.SpectrumOpacity, &s.TargetResolution,
@@ -113,16 +115,16 @@ func (r *SongRepository) GetByID(id int) (*models.Song, error) {
 func (r *SongRepository) Create(song *models.Song) error {
 	query := `INSERT INTO songs (album_id, title, artist_name, genre,
 		vocals_stem_path, music_stem_path, mixed_audio_path, metadata_file_path,
-		lyrics, lyrics_display, lyrics_sections,
+		lyrics, lyrics_karaoke, lyrics_display, lyrics_sections,
 		bpm, key, tempo, duration_seconds, vocal_timing,
 		brand_logo_path, copyright_text,
 		background_style, spectrum_color, spectrum_opacity, target_resolution)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := r.db.Exec(query,
 		song.AlbumID, song.Title, song.ArtistName, song.Genre,
 		song.VocalsStemPath, song.MusicStemPath, song.MixedAudioPath, song.MetadataPath,
-		song.Lyrics, song.LyricsDisplay, song.LyricsSections,
+		song.Lyrics, song.LyricsKaraoke, song.LyricsDisplay, song.LyricsSections,
 		song.BPM, song.Key, song.Tempo, song.DurationSeconds, song.VocalTiming,
 		song.BrandLogoPath, song.CopyrightText,
 		song.BackgroundStyle, song.SpectrumColor, song.SpectrumOpacity, song.TargetResolution,
@@ -144,7 +146,7 @@ func (r *SongRepository) Create(song *models.Song) error {
 func (r *SongRepository) Update(song *models.Song) error {
 	query := `UPDATE songs SET album_id=?, title=?, artist_name=?, genre=?,
 		vocals_stem_path=?, music_stem_path=?, mixed_audio_path=?, metadata_file_path=?,
-		lyrics=?, lyrics_display=?, lyrics_sections=?,
+		lyrics=?, lyrics_karaoke=?, lyrics_display=?, lyrics_sections=?,
 		bpm=?, key=?, tempo=?, duration_seconds=?, vocal_timing=?,
 		brand_logo_path=?, copyright_text=?,
 		background_style=?, spectrum_color=?, spectrum_opacity=?, target_resolution=?,
@@ -154,7 +156,7 @@ func (r *SongRepository) Update(song *models.Song) error {
 	_, err := r.db.Exec(query,
 		song.AlbumID, song.Title, song.ArtistName, song.Genre,
 		song.VocalsStemPath, song.MusicStemPath, song.MixedAudioPath, song.MetadataPath,
-		song.Lyrics, song.LyricsDisplay, song.LyricsSections,
+		song.Lyrics, song.LyricsKaraoke, song.LyricsDisplay, song.LyricsSections,
 		song.BPM, song.Key, song.Tempo, song.DurationSeconds, song.VocalTiming,
 		song.BrandLogoPath, song.CopyrightText,
 		song.BackgroundStyle, song.SpectrumColor, song.SpectrumOpacity, song.TargetResolution,

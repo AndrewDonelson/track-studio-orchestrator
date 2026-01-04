@@ -30,6 +30,16 @@ func CreateGeneratedImage(img *models.GeneratedImage) error {
 	return nil
 }
 
+// CreateImagePrompt creates an image record with just a prompt (no actual image file yet)
+func CreateImagePrompt(img *models.GeneratedImage) (int, error) {
+	// Use the existing CreateGeneratedImage but allow empty image_path
+	err := CreateGeneratedImage(img)
+	if err != nil {
+		return 0, err
+	}
+	return img.ID, nil
+}
+
 // GetImagesBySongID retrieves all images for a song
 func GetImagesBySongID(songID int) ([]models.GeneratedImage, error) {
 	query := `
@@ -90,6 +100,17 @@ func UpdateImagePrompt(id int, prompt, negativePrompt string) error {
 		WHERE id = ?
 	`
 	_, err := DB.Exec(query, prompt, negativePrompt, id)
+	return err
+}
+
+// UpdateImagePath updates the image_path for a generated image
+func UpdateImagePath(id int, imagePath string) error {
+	query := `
+		UPDATE generated_images
+		SET image_path = ?
+		WHERE id = ?
+	`
+	_, err := DB.Exec(query, imagePath, id)
 	return err
 }
 

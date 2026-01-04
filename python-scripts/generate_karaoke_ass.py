@@ -9,14 +9,15 @@ from dataclasses import dataclass
 
 @dataclass
 class KaraokeConfig:
-    font_size: int = 48
+    font_size: int = 96  # Increased from 48 to 96 (2x)
     primary_color: str = "4169E1"  # Royal Blue (BGR format)
     highlight_color: str = "FFD700"  # Gold (BGR format)
     outline_width: int = 3
     outline_color: str = "FFFFFF"  # White (BGR format)
     shadow_depth: int = 2
-    margin_bottom: int = 0  # No margin for center positioning
-    alignment: int = 5  # Center (horizontally and vertically)
+    margin_bottom: int = 60  # Bottom margin for better positioning
+    alignment: int = 2  # Bottom center
+    max_chars_per_line: int = 45  # Maximum characters per line to prevent clipping
 
 def hex_to_ass_color(hex_color):
     """Convert hex color (RGB) to ASS color format (&HAABBGGRR&)"""
@@ -27,19 +28,56 @@ def hex_to_ass_color(hex_color):
     r, g, b = hex_color[0:2], hex_color[2:4], hex_color[4:6]
     return f"&H00{b}{g}{r}&"
 
-def create_karaoke_ass(timestamps_json, output_ass, config=KaraokeConfig()):
+def split_text_intelligently(words_data, max_chars):
+    """
+    Split words into lines that fit within max_chars while preserving timing
+    Returns list of line segments with their words
+    """
+    if not words_data:
+        return []
+    
+    lines = []
+    current_line = []
+    current_length = 0
+    
+    for word_data in words_data:
+        word = word_data['word'].strip()
+        word_len = len(word) + 1  # +1 for space
+        
+        if current_length + word_len <= max_chars or not current_line:
+            current_line.append(word_data)
+            current_length += word_len
+        else:
+            # Start new line
+            if current_line:
+                lines.append(current_line)
+            current_line = [word_data]
+            current_length = word_len
+    
+    if current_line:
+        lines.append(current_line)
+    
+    return lines
+
+def create_karaoke_ass(timestamps_json, output_ass, lyrics_text=None, config=KaraokeConfig()):
     """
     Generate ASS subtitle file with karaoke effects
+    If lyrics_text is provided, uses actual lyrics instead of Whisper transcription
     """
     # Load timestamps
     with open(timestamps_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
+    # If actual lyrics provided, split into lines matching Whisper segments
+    actual_lyrics_lines = None
+    if lyrics_text:
+        actual_lyrics_lines = [line.strip() for line in lyrics_text.split('\n') if line.strip()]
+    
     # Create ASS document header
     ass_content = f"""[Script Info]
 Title: Karaoke Subtitles
 ScriptType: v4.00+
-WrapStyle: 0
+WrapStyle: 2
 PlayResX: 1920
 PlayResY: 1080
 ScaledBorderAndShadow: yes
@@ -54,6 +92,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     
     # Process each segment
     events = []
+    lyrics_line_idx = 0
+    
     for segment in data['segments']:
         if 'words' not in segment:
             continue
@@ -62,20 +102,43 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         segment_start = segment['start']
         segment_end = segment['end']
         
-        # Build karaoke line with \k tags
-        karaoke_text = ""
-        for word in words:
-            # Calculate centiseconds for \k tag
-            duration_cs = int((word['end'] - word['start']) * 100)
-            karaoke_text += f"{{\\k{duration_cs}}}{word['word']} "
+        # Check if line is too long and needs splitting
+        total_text = ' '.join([w['word'].strip() for w in words])
         
-        # Format timestamp for ASS (H:MM:SS.CC)
-        start_time = format_ass_time(segment_start)
-        end_time = format_ass_time(segment_end)
-        
-        # Create dialogue line
-        event = f"Dialogue: 0,{start_time},{end_time},Karaoke,,0,0,0,,{karaoke_text.strip()}"
-        events.append(event)
+        if len(total_text) > config.max_chars_per_line:
+            # Split into multiple subtitle lines
+            line_segments = split_text_intelligently(words, config.max_chars_per_line)
+            
+            for line_words in line_segments:
+                if not line_words:
+                    continue
+                    
+                line_start = line_words[0]['start']
+                line_end = line_words[-1]['end']
+                
+                # Build karaoke text for this line
+                karaoke_text = ""
+                for word in line_words:
+                    duration_cs = int((word['end'] - word['start']) * 100)
+                    karaoke_text += f"{{\\k{duration_cs}}}{word['word'].strip()} "
+                
+                start_time = format_ass_time(line_start)
+                end_time = format_ass_time(line_end)
+                
+                event = f"Dialogue: 0,{start_time},{end_time},Karaoke,,0,0,0,,{karaoke_text.strip()}"
+                events.append(event)
+        else:
+            # Line fits on one line - keep as is
+            karaoke_text = ""
+            for word in words:
+                duration_cs = int((word['end'] - word['start']) * 100)
+                karaoke_text += f"{{\\k{duration_cs}}}{word['word'].strip()} "
+            
+            start_time = format_ass_time(segment_start)
+            end_time = format_ass_time(segment_end)
+            
+            event = f"Dialogue: 0,{start_time},{end_time},Karaoke,,0,0,0,,{karaoke_text.strip()}"
+            events.append(event)
     
     ass_content += "\n".join(events)
     
@@ -98,13 +161,21 @@ def main():
     parser = argparse.ArgumentParser(description='Generate ASS karaoke subtitles from timestamps')
     parser.add_argument('--timestamps', required=True, help='Input timestamps JSON file')
     parser.add_argument('--output', required=True, help='Output ASS file')
-    parser.add_argument('--font-size', type=int, default=48, help='Font size (default: 48)')
+    parser.add_argument('--lyrics', help='Optional: Actual lyrics file (uses real lyrics instead of Whisper transcription)')
+    parser.add_argument('--font-size', type=int, default=96, help='Font size (default: 96)')
+    parser.add_argument('--max-chars', type=int, default=45, help='Max characters per line (default: 45)')
     
     args = parser.parse_args()
     
     try:
-        config = KaraokeConfig(font_size=args.font_size)
-        create_karaoke_ass(args.timestamps, args.output, config)
+        # Load actual lyrics if provided
+        lyrics_text = None
+        if args.lyrics:
+            with open(args.lyrics, 'r', encoding='utf-8') as f:
+                lyrics_text = f.read()
+        
+        config = KaraokeConfig(font_size=args.font_size, max_chars_per_line=args.max_chars)
+        create_karaoke_ass(args.timestamps, args.output, lyrics_text, config)
         sys.exit(0)
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)

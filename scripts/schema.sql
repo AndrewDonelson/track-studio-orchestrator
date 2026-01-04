@@ -39,9 +39,10 @@ CREATE TABLE IF NOT EXISTS songs (
     metadata_file_path TEXT,
     
     -- Lyrics
-    lyrics TEXT NOT NULL,
-    lyrics_display TEXT,  -- JSON
-    lyrics_sections TEXT, -- JSON
+    lyrics TEXT NOT NULL,           -- Original song lyrics with [Verse], [Chorus], etc.
+    lyrics_karaoke TEXT,            -- Formatted lyrics for karaoke display (no section labels)
+    lyrics_display TEXT,            -- JSON
+    lyrics_sections TEXT,           -- JSON
     
     -- Audio analysis
     bpm REAL,

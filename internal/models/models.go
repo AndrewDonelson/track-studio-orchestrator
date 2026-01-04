@@ -39,9 +39,10 @@ type Song struct {
 	MetadataPath   string `json:"metadata_file_path" db:"metadata_file_path"`
 
 	// Lyrics
-	Lyrics         string `json:"lyrics" db:"lyrics"`
-	LyricsDisplay  string `json:"lyrics_display" db:"lyrics_display"`   // JSON
-	LyricsSections string `json:"lyrics_sections" db:"lyrics_sections"` // JSON
+	Lyrics         string `json:"lyrics" db:"lyrics"`                           // Original song lyrics with [Verse], [Chorus], etc.
+	LyricsKaraoke  string `json:"lyrics_karaoke,omitempty" db:"lyrics_karaoke"` // Formatted lyrics for karaoke display (no section labels)
+	LyricsDisplay  string `json:"lyrics_display" db:"lyrics_display"`           // JSON
+	LyricsSections string `json:"lyrics_sections" db:"lyrics_sections"`         // JSON
 
 	// Audio analysis
 	BPM             float64 `json:"bpm" db:"bpm"`

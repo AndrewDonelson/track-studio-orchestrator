@@ -63,6 +63,80 @@ def get_tempo_description(bpm: float) -> str:
         return "Extremely Fast"
 
 
+def estimate_genre(y: np.ndarray, sr: int, tempo: float, spectral_centroid: float, 
+                   zero_crossing_rate: float) -> str:
+    """
+    Estimate musical genre based on audio features
+    Uses tempo, spectral characteristics, and rhythmic patterns
+    """
+    # Calculate additional features for genre classification
+    spectral_rolloff = np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))
+    spectral_bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
+    
+    # Normalize features for comparison
+    tempo_norm = tempo / 180.0  # Normalize to typical max BPM
+    centroid_norm = spectral_centroid / 4000.0  # Normalize to typical range
+    zcr_norm = zero_crossing_rate
+    
+    # Genre classification heuristics based on audio characteristics
+    
+    # Electronic/Dance: High tempo, high spectral content, regular rhythm
+    if tempo > 120 and spectral_centroid > 2500 and spectral_bandwidth > 1800:
+        if tempo > 140:
+            return "Electronic"
+        return "Dance"
+    
+    # Rock/Metal: High zero-crossing rate, high spectral rolloff, moderate-high tempo
+    if zero_crossing_rate > 0.1 and spectral_rolloff > 4000:
+        if tempo > 140 and spectral_centroid > 3000:
+            return "Metal"
+        return "Rock"
+    
+    # Hip-Hop: Moderate tempo, lower spectral centroid, strong rhythm
+    if 80 <= tempo <= 110 and spectral_centroid < 2000:
+        return "Hip-Hop"
+    
+    # R&B/Soul: Moderate tempo, smooth spectral characteristics
+    if 70 <= tempo <= 100 and spectral_centroid < 2500 and zero_crossing_rate < 0.08:
+        return "R&B"
+    
+    # Jazz: Variable tempo, high spectral complexity
+    if spectral_bandwidth > 2000 and 100 <= tempo <= 140:
+        return "Jazz"
+    
+    # Classical: Wide dynamic range, complex spectral content
+    if spectral_bandwidth > 2200 and tempo < 140:
+        return "Classical"
+    
+    # Country: Moderate tempo, characteristic spectral profile
+    if 90 <= tempo <= 130 and 1500 <= spectral_centroid <= 2500:
+        return "Country"
+    
+    # Blues: Slower tempo, warm tones (lower spectral centroid)
+    if tempo < 100 and spectral_centroid < 1800:
+        return "Blues"
+    
+    # Pop: Moderate tempo, balanced spectral content (most common default)
+    if 100 <= tempo <= 130:
+        return "Pop"
+    
+    # Indie/Alternative: Doesn't fit clear categories
+    if 90 <= tempo <= 140:
+        return "Indie"
+    
+    # Reggae: Distinctive tempo range and rhythm
+    if 80 <= tempo <= 110 and zero_crossing_rate < 0.09:
+        return "Reggae"
+    
+    # Default fallback based on tempo
+    if tempo < 80:
+        return "Ballad"
+    elif tempo > 150:
+        return "Punk"
+    else:
+        return "Alternative"
+
+
 def detect_vocal_segments(y: np.ndarray, sr: int, beat_times: np.ndarray) -> List[Dict]:
     """
     Detect vocal segments using RMS energy analysis
@@ -145,12 +219,16 @@ def analyze_audio(file_path: str) -> Dict:
         spectral_centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
         zero_crossing_rate = float(np.mean(librosa.feature.zero_crossing_rate(y)))
         
+        # Estimate genre based on audio characteristics
+        genre = estimate_genre(y, sr, tempo, spectral_centroid, zero_crossing_rate)
+        
         # Output as JSON
         result = {
             'duration_seconds': float(duration),
             'bpm': float(tempo),
             'key': key,
             'tempo': get_tempo_description(tempo),
+            'genre': genre,
             'beat_times': [float(t) for t in beat_times.tolist()],
             'beat_count': len(beat_times),
             'vocal_segments': vocal_segments,

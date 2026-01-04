@@ -14,6 +14,7 @@ type AudioAnalysis struct {
 	BPM               float64        `json:"bpm"`
 	Key               string         `json:"key"`
 	Tempo             string         `json:"tempo"`
+	Genre             string         `json:"genre"`
 	BeatTimes         []float64      `json:"beat_times"`
 	BeatCount         int            `json:"beat_count"`
 	VocalSegments     []VocalSegment `json:"vocal_segments"`
@@ -52,6 +53,16 @@ func AnalyzeAudio(audioPath string) (*AudioAnalysis, error) {
 		}
 		execDir := filepath.Dir(execPath)
 		scriptPath = filepath.Join(execDir, "pkg", "audio", "analyzer.py")
+
+		// If still not found, try relative to binary's parent directory
+		if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+			// Try going up from bin/ directory
+			scriptPath = filepath.Join(filepath.Dir(execDir), "pkg", "audio", "analyzer.py")
+			if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+				return nil, fmt.Errorf("analyzer script not found in any expected location (tried: %s/pkg/audio/analyzer.py, %s/pkg/audio/analyzer.py, %s)",
+					cwd, filepath.Dir(execPath), scriptPath)
+			}
+		}
 	}
 
 	// Execute Python script

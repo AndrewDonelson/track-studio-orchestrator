@@ -103,6 +103,12 @@ func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) erro
 	song.Tempo = analysis.Tempo
 	song.DurationSeconds = analysis.DurationSeconds
 
+	// Update genre from audio analysis (if not already set manually)
+	if song.Genre == "" && analysis.Genre != "" {
+		song.Genre = analysis.Genre
+		log.Printf("Detected genre: %s", analysis.Genre)
+	}
+
 	// If we have separate vocal track, analyze it for vocal timing
 	if vocalAudioPath != "" && vocalAudioPath != bpmAudioPath {
 		vocalAnalysis, err := audio.AnalyzeAudio(vocalAudioPath)
@@ -190,6 +196,161 @@ func (p *Processor) processLyrics(item *models.QueueItem, song *models.Song) err
 
 // generateImages generates background images via CQAI for each unique section
 func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) error {
+	p.updateProgress(item, "Generating images", 30, "Scanning for existing images")
+
+	// Get executable directory for absolute paths
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+	execDir := filepath.Dir(execPath)
+	outputDir := filepath.Join(execDir, "storage", "images", fmt.Sprintf("song_%d", song.ID))
+	imageGen := image.NewImageGenerator(outputDir)
+
+	// Step 1: Check for existing image FILES on disk
+	existingFiles := make(map[string]string) // filename -> full path
+	if _, err := os.Stat(outputDir); err == nil {
+		files, err := os.ReadDir(outputDir)
+		if err == nil {
+			for _, file := range files {
+				if !file.IsDir() && strings.HasSuffix(file.Name(), ".png") {
+					existingFiles[file.Name()] = filepath.Join(outputDir, file.Name())
+					log.Printf("Found existing image file: %s", file.Name())
+				}
+			}
+		}
+	}
+
+	// Step 2: Check database for existing image prompts
+	existingImages, err := database.GetImagesBySongID(song.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get existing images: %w", err)
+	}
+
+	// Step 3: Reverse-engineer prompts from orphaned image files (files without database entries)
+	if len(existingFiles) > 0 && len(existingImages) == 0 {
+		p.updateProgress(item, "Generating images", 32, fmt.Sprintf("Reverse-engineering prompts from %d existing images", len(existingFiles)))
+		log.Printf("Found %d image files but no database entries - extracting prompts with vision AI", len(existingFiles))
+
+		fileIndex := 0
+		for filename, filePath := range existingFiles {
+			fileIndex++
+			progress := 32 + ((fileIndex * 8) / len(existingFiles))
+			p.updateProgress(item, "Generating images", progress, fmt.Sprintf("Analyzing image %d/%d with vision AI", fileIndex, len(existingFiles)))
+
+			// Extract prompt using vision model
+			log.Printf("Extracting prompt from %s using vision AI...", filename)
+			extractedPrompt, err := imageGen.ExtractPromptFromImage(filePath)
+			if err != nil {
+				log.Printf("Warning: failed to extract prompt from %s: %v", filename, err)
+				continue
+			}
+
+			// Parse filename to determine image type and sequence
+			// Format: bg-verse-1.png, bg-chorus.png, bg-intro.png, etc.
+			imageType, sequenceNum := parseImageFilename(filename)
+			if imageType == "" {
+				log.Printf("Warning: couldn't parse image type from filename: %s", filename)
+				continue
+			}
+
+			// Create database entry with extracted prompt
+			relativePath := strings.TrimPrefix(filePath, execDir+"/")
+			genImage := &models.GeneratedImage{
+				SongID:         song.ID,
+				QueueID:        &item.ID,
+				ImagePath:      relativePath,
+				Prompt:         extractedPrompt,
+				NegativePrompt: image.MASTER_NEGATIVE_PROMPT,
+				ImageType:      imageType,
+				SequenceNumber: sequenceNum,
+				Width:          1920,
+				Height:         1080,
+				Model:          "cqai",
+			}
+
+			if err := database.CreateGeneratedImage(genImage); err != nil {
+				log.Printf("Warning: failed to create database entry for %s: %v", filename, err)
+				continue
+			}
+
+			log.Printf("Successfully reverse-engineered prompt for %s (type: %s)", filename, imageType)
+		}
+
+		// Refresh the list of existing images from database
+		existingImages, err = database.GetImagesBySongID(song.ID)
+		if err != nil {
+			return fmt.Errorf("failed to refresh image list: %w", err)
+		}
+	}
+
+	// Step 4: Check which images are missing (have prompts but no files)
+	var missingImages []models.GeneratedImage
+	for _, img := range existingImages {
+		if img.ImagePath == "" || img.ImagePath == "." {
+			missingImages = append(missingImages, img)
+		}
+	}
+
+	if len(missingImages) > 0 {
+		log.Printf("Found %d existing prompts with missing images, generating them now", len(missingImages))
+		p.updateProgress(item, "Generating images", 40, fmt.Sprintf("Generating %d missing images from saved prompts", len(missingImages)))
+
+		// Generate each missing image using its stored prompt
+		for i, img := range missingImages {
+			progress := 40 + ((i+1)*10)/len(missingImages)
+
+			// Generate filename based on image type and sequence number
+			var filename string
+			if img.SequenceNumber != nil && *img.SequenceNumber > 0 {
+				filename = fmt.Sprintf("bg-%s-%d.png", img.ImageType, *img.SequenceNumber)
+			} else {
+				filename = fmt.Sprintf("bg-%s.png", img.ImageType)
+			}
+
+			message := fmt.Sprintf("Generating %s image (%d/%d)", img.ImageType, i+1, len(missingImages))
+			p.updateProgress(item, "Generating images", progress, message)
+
+			log.Printf("Generating missing image: %s with prompt: %s", filename, img.Prompt)
+
+			// Generate image using the stored prompt
+			imagePath, err := imageGen.GenerateImage(img.Prompt, filename)
+			if err != nil {
+				log.Printf("Warning: failed to generate image %s: %v", filename, err)
+				continue
+			}
+
+			// Update database with the new image path
+			relativePath := strings.TrimPrefix(imagePath, execDir+"/")
+			if err := database.UpdateImagePath(img.ID, relativePath); err != nil {
+				log.Printf("Warning: failed to update image path for %d: %v", img.ID, err)
+				continue
+			}
+
+			log.Printf("Generated missing image %d/%d: %s", i+1, len(missingImages), imagePath)
+		}
+
+		p.updateProgress(item, "Generating images", 50, "All images ready")
+		return nil
+	}
+
+	// Step 5: Check if all required images already exist (in database with paths)
+	allImagesReady := len(existingImages) > 0
+	for _, img := range existingImages {
+		if img.ImagePath == "" || img.ImagePath == "." {
+			allImagesReady = false
+			break
+		}
+	}
+
+	if allImagesReady {
+		log.Printf("All %d images already exist in database with valid paths, skipping generation", len(existingImages))
+		p.updateProgress(item, "Generating images", 50, fmt.Sprintf("Using %d existing images", len(existingImages)))
+		return nil
+	}
+
+	// No existing prompts found, use legacy generation method
+	log.Printf("No existing image prompts found, generating from lyrics")
 	p.updateProgress(item, "Generating images", 34, "Parsing lyrics sections")
 
 	// Parse lyrics to get sections
@@ -203,15 +364,7 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		return nil
 	}
 
-	// Create image generator with absolute path
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-	execDir := filepath.Dir(execPath)
-	outputDir := filepath.Join(execDir, "storage", "images", fmt.Sprintf("song_%d", song.ID))
-	imageGen := image.NewImageGenerator(outputDir)
-
+	// Image generator already created at top of function, reuse it
 	// Build style keywords from genre and background style
 	styleKeywords := image.BuildStyleKeywords(song.Genre, song.BackgroundStyle)
 	log.Printf("Style keywords for %s: %s", song.Title, styleKeywords)
@@ -225,11 +378,12 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		// Calculate progress (34% to 50%)
 		progress := 34 + ((i+1)*16)/totalSections
 
-		// Determine if we need to generate this image
+		// Determine filename - ONE IMAGE PER SECTION TYPE (not per occurrence)
+		// All verses use "bg-verse.png", all choruses use "bg-chorus.png", etc.
 		var filename string
 		switch section.Type {
 		case "verse":
-			filename = fmt.Sprintf("bg-verse-%d.png", section.Number)
+			filename = "bg-verse.png" // All verses share this image
 		case "pre-chorus":
 			filename = "bg-prechorus.png"
 		case "chorus":
@@ -241,10 +395,10 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		case "outro":
 			filename = "bg-outro.png"
 		default:
-			filename = fmt.Sprintf("bg-%s-%d.png", section.Type, section.Number)
+			filename = fmt.Sprintf("bg-%s.png", section.Type)
 		}
 
-		// Check if already generated (for repeated choruses/pre-choruses)
+		// Check if already generated (reuse for all repeated section types)
 		if existingPath, exists := generatedImages[filename]; exists {
 			log.Printf("Reusing existing image for %s %d: %s", section.Type, section.Number, filename)
 			imagePaths = append(imagePaths, existingPath)
@@ -260,7 +414,7 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 
 		// Generate image
 		log.Printf("Generating image for %s %d: %s", section.Type, section.Number, filename)
-		imagePath, err := imageGen.GenerateFromSection(
+		imagePath, prompt, err := imageGen.GenerateFromSection(
 			section.Type,
 			section.Number,
 			sectionLyrics,
@@ -277,13 +431,13 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		imagePaths = append(imagePaths, imagePath)
 		log.Printf("Generated image %d/%d: %s", len(generatedImages), totalSections, imagePath)
 
-		// Store image in database
+		// Store image in database with captured prompt
 		genImage := &models.GeneratedImage{
 			SongID:         song.ID,
 			QueueID:        &item.ID,
 			ImagePath:      imagePath,
-			Prompt:         "", // TODO: Get actual prompt from imageGen
-			NegativePrompt: "",
+			Prompt:         prompt,
+			NegativePrompt: image.MASTER_NEGATIVE_PROMPT,
 			ImageType:      section.Type,
 			SequenceNumber: &section.Number,
 			Width:          1920,
@@ -401,9 +555,9 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 		// Create karaoke generator
 		karaokeGen := lyrics.NewKaraokeGenerator(execDir)
 
-		// Generate ASS subtitles from vocals
+		// Generate ASS subtitles from vocals, using lyrics_karaoke for display
 		tempDir := filepath.Join(execDir, "storage", "temp")
-		assPath, err := karaokeGen.GenerateKaraokeSubtitles(song.VocalsStemPath, int(song.ID), tempDir)
+		assPath, err := karaokeGen.GenerateKaraokeSubtitles(song.VocalsStemPath, int(song.ID), tempDir, song.LyricsKaraoke)
 		if err != nil {
 			log.Printf("Warning: failed to generate karaoke subtitles: %v, using fallback lyrics", err)
 		} else {
@@ -581,6 +735,41 @@ func (p *Processor) mixAudioTracks(vocalsPath, instrumentalPath, outputPath stri
 	}
 
 	return nil
+}
+
+// parseImageFilename extracts image type and sequence number from filename
+// Examples: bg-verse-1.png -> ("verse", 1), bg-chorus.png -> ("chorus", 0), bg-intro.png -> ("intro", 0)
+func parseImageFilename(filename string) (string, *int) {
+	// Remove extension
+	name := strings.TrimSuffix(filename, ".png")
+
+	// Remove "bg-" prefix if present
+	name = strings.TrimPrefix(name, "bg-")
+
+	// Split by hyphen to check for sequence number
+	parts := strings.Split(name, "-")
+
+	if len(parts) == 1 {
+		// No sequence number: bg-intro.png, bg-chorus.png, etc.
+		return parts[0], nil
+	}
+
+	if len(parts) == 2 {
+		// Has sequence number: bg-verse-1.png, bg-verse-2.png
+		imageType := parts[0]
+
+		// Try to parse sequence number
+		var seqNum int
+		if _, err := fmt.Sscanf(parts[1], "%d", &seqNum); err == nil {
+			return imageType, &seqNum
+		}
+
+		// If parsing fails, treat whole thing as type
+		return name, nil
+	}
+
+	// Multiple hyphens - join as type name
+	return name, nil
 }
 
 // uploadToYouTube uploads the video to YouTube
