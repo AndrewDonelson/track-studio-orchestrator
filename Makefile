@@ -52,11 +52,13 @@ help:
 	@echo "  make deps-verify  - Verify dependencies"
 	@echo ""
 	@echo "$(COLOR_BLUE)Deployment:$(COLOR_RESET)"
-	@echo "  make deploy-mule  - Deploy to mule.nlaakstudios"
-	@echo "  make status-mule  - Check service status on mule"
-	@echo "  make logs-mule    - View service logs on mule"
-	@echo "  make restart-mule - Restart service on mule"
-	@echo "  make ssh-mule     - SSH into mule server"
+	@echo "  make deploy-mule       - Deploy binary to mule.nlaakstudios"
+	@echo "  make deploy-mule-data  - Sync database and storage to mule"
+	@echo "  make status-mule       - Check service status on mule"
+	@echo "  make logs-mule         - View service logs on mule"
+	@echo "  make restart-mule      - Restart service on mule"
+	@echo "  make test-cqai         - Test connection to cqai from mule"
+	@echo "  make ssh-mule          - SSH into mule server"
 	@echo ""
 	@echo "$(COLOR_BLUE)Database:$(COLOR_RESET)"
 	@echo "  make db-init      - Initialize local database"
@@ -192,39 +194,87 @@ db-reset:
 ## deploy-mule: Deploy to mule.nlaakstudios
 deploy-mule: build-linux
 	@echo "$(COLOR_GREEN)Deploying to $(MULE_HOST)...$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_BLUE)→ Stopping existing server...$(COLOR_RESET)"
+	@ssh $(MULE_HOST) "pkill -f trackstudio-server" 2>/dev/null || true
+	@sleep 1
 	@echo "$(COLOR_BLUE)→ Creating directories...$(COLOR_RESET)"
-	@ssh $(MULE_USER)@$(MULE_HOST) "mkdir -p $(MULE_PATH)/{bin,data,storage/{songs,videos,temp},config,scripts}"
+	@ssh $(MULE_HOST) "mkdir -p $(MULE_PATH)/{bin,config,scripts}"
+	@ssh $(MULE_HOST) "mkdir -p $(MULE_DATA_PATH)/{audio,images,videos,temp,logs,python-scripts,branding}"
 	@echo "$(COLOR_BLUE)→ Uploading binary...$(COLOR_RESET)"
-	@scp $(BUILD_DIR)/$(BINARY_NAME)-linux $(MULE_USER)@$(MULE_HOST):$(MULE_PATH)/bin/$(BINARY_NAME)
-	@ssh $(MULE_USER)@$(MULE_HOST) "chmod +x $(MULE_PATH)/bin/$(BINARY_NAME)"
-	@echo "$(COLOR_BLUE)→ Uploading configuration...$(COLOR_RESET)"
-	@rsync -avz --exclude='data/' --exclude='storage/' --exclude='bin/' --exclude='.git/' \
-		./config/ $(MULE_USER)@$(MULE_HOST):$(MULE_PATH)/config/ || true
-	@rsync -avz --exclude='.git/' \
-		./scripts/ $(MULE_USER)@$(MULE_HOST):$(MULE_PATH)/scripts/ || true
-	@echo "$(COLOR_BLUE)→ Restarting service...$(COLOR_RESET)"
-	@ssh $(MULE_USER)@$(MULE_HOST) "sudo systemctl restart $(MULE_SERVICE) 2>/dev/null || echo 'Service not configured yet'"
+	@scp $(BUILD_DIR)/$(BINARY_NAME)-linux $(MULE_HOST):$(MULE_PATH)/bin/$(BINARY_NAME)
+	@ssh $(MULE_HOST) "chmod +x $(MULE_PATH)/bin/$(BINARY_NAME)"
+	@echo "$(COLOR_BLUE)→ Uploading Python scripts...$(COLOR_RESET)"
+	@rsync -avz --progress python-scripts/ $(MULE_HOST):$(MULE_DATA_PATH)/python-scripts/
+	@echo "$(COLOR_BLUE)→ Starting server...$(COLOR_RESET)"
+	@ssh $(MULE_HOST) "cd $(MULE_PATH) && nohup ./bin/$(BINARY_NAME) > server.log 2>&1 &"
+	@sleep 2
 	@echo "$(COLOR_GREEN)✓ Deployment complete!$(COLOR_RESET)"
 	@echo ""
+	@echo "Server running on: $(COLOR_BOLD)http://192.168.1.200:8080$(COLOR_RESET)"
+	@echo ""
+	@echo "To copy database and storage: $(COLOR_BOLD)make deploy-mule-data$(COLOR_RESET)"
+	@echo "Check status with:            $(COLOR_BOLD)make status-mule$(COLOR_RESET)"
+	@echo "View logs with:               $(COLOR_BOLD)make logs-mule$(COLOR_RESET)"
+
+## deploy-mule-data: Sync database and storage to mule
+deploy-mule-data:
+	@echo "$(COLOR_YELLOW)Syncing database and storage to $(MULE_HOST)...$(COLOR_RESET)"
+	@echo "$(COLOR_YELLOW)⚠ This will overwrite data on mule!$(COLOR_RESET)"
+	@echo ""
+	@read -p "Continue? (y/N): " confirm; \
+	if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
+		echo "$(COLOR_YELLOW)Cancelled.$(COLOR_RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(COLOR_BLUE)→ Stopping server...$(COLOR_RESET)"; \
+	ssh $(MULE_HOST) "pkill -f trackstudio-server" 2>/dev/null || true; \
+	sleep 1; \
+	echo "$(COLOR_BLUE)→ Syncing track-studio-data (this may take a while)...$(COLOR_RESET)"; \
+	rsync -avz --progress ~/track-studio-data/ $(MULE_HOST):$(MULE_DATA_PATH)/ \
+		--exclude='*.log' --exclude='temp/*' --exclude='.venv'; \
+	echo "$(COLOR_BLUE)→ Starting server...$(COLOR_RESET)"; \
+	ssh $(MULE_HOST) "cd $(MULE_PATH) && nohup ./bin/$(BINARY_NAME) > server.log 2>&1 &"; \
+	sleep 2; \
+	echo "$(COLOR_GREEN)✓ Data sync complete!$(COLOR_RESET)"
+	@echo "$(COLOR_BLUE)→ Starting server...$(COLOR_RESET)"
+	@ssh $(MULE_HOST) "cd $(MULE_PATH) && nohup ./bin/$(BINARY_NAME) > server.log 2>&1 &"
+	@sleep 2
+	@echo "$(COLOR_GREEN)✓ Deployment complete!$(COLOR_RESET)"
+	@echo ""
+	@echo "Server running on: $(COLOR_BOLD)http://192.168.1.200:8080$(COLOR_RESET)"
 	@echo "Check status with: $(COLOR_BOLD)make status-mule$(COLOR_RESET)"
 	@echo "View logs with:    $(COLOR_BOLD)make logs-mule$(COLOR_RESET)"
 
 ## status-mule: Check service status on mule
 status-mule:
 	@echo "$(COLOR_BLUE)Checking service status on $(MULE_HOST)...$(COLOR_RESET)"
-	@ssh $(MULE_USER)@$(MULE_HOST) "sudo systemctl status $(MULE_SERVICE) --no-pager"
+	@ssh $(MULE_HOST) "ps aux | grep trackstudio-server | grep -v grep || echo 'Server not running'"
 
 ## logs-mule: View service logs on mule
 logs-mule:
 	@echo "$(COLOR_BLUE)Viewing logs on $(MULE_HOST) (Ctrl+C to exit)...$(COLOR_RESET)"
-	@ssh $(MULE_USER)@$(MULE_HOST) "sudo journalctl -u $(MULE_SERVICE) -f"
+	@ssh $(MULE_HOST) "tail -f $(MULE_PATH)/server.log"
 
 ## restart-mule: Restart service on mule
 restart-mule:
 	@echo "$(COLOR_BLUE)Restarting service on $(MULE_HOST)...$(COLOR_RESET)"
-	@ssh $(MULE_USER)@$(MULE_HOST) "sudo systemctl restart $(MULE_SERVICE)"
+	@ssh $(MULE_HOST) "pkill -f trackstudio-server || true"
+	@sleep 1
+	@ssh $(MULE_HOST) "cd $(MULE_PATH) && nohup ./bin/$(BINARY_NAME) > server.log 2>&1 &"
+	@sleep 2
 	@echo "$(COLOR_GREEN)✓ Service restarted$(COLOR_RESET)"
 	@$(MAKE) status-mule
+
+## test-cqai: Test connection to cqai from mule
+test-cqai:
+	@echo "$(COLOR_BLUE)Testing connections from mule to cqai.nlaakstudios...$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_YELLOW)Testing Ollama API (LLM):$(COLOR_RESET)"
+	@ssh $(MULE_HOST) "curl -s http://cqai.nlaakstudios:11434/api/tags | head -20 && echo '$(COLOR_GREEN)✓ Ollama API accessible$(COLOR_RESET)' || echo '$(COLOR_YELLOW)✗ Ollama API not accessible$(COLOR_RESET)'"
+	@echo ""
+	@echo "$(COLOR_YELLOW)Testing Image Generation API:$(COLOR_RESET)"
+	@ssh $(MULE_HOST) "curl -s http://cqai.nlaakstudios/health && echo '$(COLOR_GREEN)✓ Image API accessible$(COLOR_RESET)' || echo '$(COLOR_YELLOW)✗ Image API not accessible$(COLOR_RESET)'"
 
 ## ssh-mule: SSH into mule server
 ssh-mule:
