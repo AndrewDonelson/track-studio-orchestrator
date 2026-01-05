@@ -12,11 +12,12 @@ import (
 
 // VideoRenderer handles video composition with FFmpeg
 type VideoRenderer struct {
-	Width     int
-	Height    int
-	FPS       int
-	OutputDir string
-	TempDir   string
+	Width        int
+	Height       int
+	FPS          int
+	OutputDir    string
+	TempDir      string
+	BrandingPath string // Path to branding directory for logos
 
 	// Timing statistics
 	RenderTimings    []time.Duration
@@ -72,12 +73,13 @@ type LyricLine struct {
 	EndTime   float64
 }
 
-func NewVideoRenderer(outputDir string) *VideoRenderer {
+func NewVideoRenderer(outputDir string, brandingPath string) *VideoRenderer {
 	return &VideoRenderer{
 		Width:            1920,
 		Height:           1024,
 		FPS:              30,
 		OutputDir:        outputDir,
+		BrandingPath:     brandingPath,
 		TempDir:          filepath.Join(outputDir, "temp"),
 		RenderTimings:    make([]time.Duration, 0),
 		MaxTimingSamples: 5,
@@ -188,7 +190,7 @@ func (vr *VideoRenderer) addMetadataOverlays(inputPath string, opts *VideoRender
 	filterStr := strings.Join(filterParts, ",")
 
 	// Check if artist logo exists for overlay
-	logoPath := filepath.Join("storage", "branding", "artist-logo.png")
+	logoPath := filepath.Join(vr.BrandingPath, "artist-logo.png")
 	logoExists := false
 	if _, err := os.Stat(logoPath); err == nil {
 		logoExists = true
@@ -285,7 +287,7 @@ func (vr *VideoRenderer) createBasicVideo(opts *VideoRenderOptions) (string, err
 	filterStr := strings.Join(filterParts, ",")
 
 	// Check if artist logo exists for overlay
-	logoPath := filepath.Join("storage", "branding", "artist-logo.png")
+	logoPath := filepath.Join(vr.BrandingPath, "artist-logo.png")
 	logoExists := false
 	if _, err := os.Stat(logoPath); err == nil {
 		logoExists = true
@@ -704,7 +706,7 @@ func (vr *VideoRenderer) addBrandingOverlays(inputPath string, opts *VideoRender
 	tempPath := filepath.Join(vr.TempDir, "with_branding.mp4")
 
 	// Check if artist logo exists
-	logoPath := filepath.Join("storage", "branding", "artist-logo.png")
+	logoPath := filepath.Join(vr.BrandingPath, "artist-logo.png")
 	logoExists := false
 	if _, err := os.Stat(logoPath); err == nil {
 		logoExists = true
@@ -731,8 +733,8 @@ func (vr *VideoRenderer) addBrandingOverlays(inputPath string, opts *VideoRender
 	// Build FFmpeg command with logo overlay if it exists
 	var cmd *exec.Cmd
 	if logoExists {
-		// Use overlay filter to add logo (150x150, bottom-right, 20px margins)
-		// Note: At this stage, there's no audio yet (added later in addAudio step)
+		// Use overlay filter to add logo (150x150, bottom-right corner, 20px margins)
+		// Note: Logo is positioned in BOTTOM-RIGHT, not bottom-left
 		cmd = exec.Command("ffmpeg",
 			"-i", inputPath,
 			"-i", logoPath,
@@ -1130,7 +1132,7 @@ func (vr *VideoRenderer) addASSSubtitles(inputPath, assPath, outputPath string) 
 	log.Printf("Adding ASS subtitles from: %s", assPath)
 
 	// Check if artist logo exists for overlay
-	logoPath := filepath.Join("storage", "branding", "artist-logo.png")
+	logoPath := filepath.Join(vr.BrandingPath, "artist-logo.png")
 	logoExists := false
 	if _, err := os.Stat(logoPath); err == nil {
 		logoExists = true

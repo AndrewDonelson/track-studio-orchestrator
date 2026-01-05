@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/AndrewDonelson/track-studio-orchestrator/config"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
@@ -27,8 +28,9 @@ func NewWorker(
 	songRepo *database.SongRepository,
 	broadcaster *services.ProgressBroadcaster,
 	pollInterval time.Duration,
+	cfg *config.Config,
 ) *Worker {
-	processor := NewProcessor(songRepo, broadcaster)
+	processor := NewProcessor(songRepo, broadcaster, cfg)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Worker{

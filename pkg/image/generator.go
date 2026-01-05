@@ -46,15 +46,17 @@ Output ONLY the image prompt with NO preamble or explanation.`
 )
 
 type ImageGenerator struct {
-	BaseURL    string
-	LLMURL     string
-	ImageModel string
-	LLMModel   string
-	OutputDir  string
-	Width      int
-	Height     int
-	Steps      int
-	Timeout    time.Duration
+	BaseURL        string
+	LLMURL         string
+	MasterPrompt   string // From settings
+	MasterNegative string // From settings
+	ImageModel     string
+	LLMModel       string
+	OutputDir      string
+	Width          int
+	Height         int
+	Steps          int
+	Timeout        time.Duration
 
 	// Timing statistics for adaptive timeouts and ETAs
 	LLMTimings       []time.Duration
@@ -202,9 +204,14 @@ func (ig *ImageGenerator) GenerateImageWithNegative(prompt, customNegative, outp
 	enhancedPrompt := prompt
 
 	// Combine master negative prompt with custom negative prompt
-	finalNegative := MASTER_NEGATIVE_PROMPT
+	// Use settings master negative if available, otherwise use default constant
+	masterNeg := ig.MasterNegative
+	if masterNeg == "" {
+		masterNeg = MASTER_NEGATIVE_PROMPT
+	}
+	finalNegative := masterNeg
 	if customNegative != "" {
-		finalNegative = fmt.Sprintf("%s, %s", MASTER_NEGATIVE_PROMPT, customNegative)
+		finalNegative = fmt.Sprintf("%s, %s", masterNeg, customNegative)
 	}
 
 	req := ZImageRequest{

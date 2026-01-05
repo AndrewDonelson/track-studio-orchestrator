@@ -1,25 +1,31 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
+	"github.com/AndrewDonelson/track-studio-orchestrator/config"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
 // SongHandler handles song-related requests
 type SongHandler struct {
-	repo *database.SongRepository
+	repo   *database.SongRepository
+	config *config.Config
 }
 
 // NewSongHandler creates a new song handler
-func NewSongHandler(repo *database.SongRepository) *SongHandler {
-	return &SongHandler{repo: repo}
+func NewSongHandler(repo *database.SongRepository, cfg *config.Config) *SongHandler {
+	return &SongHandler{
+		repo:   repo,
+		config: cfg,
+	}
 }
 
 // GetAll returns all songs
@@ -136,88 +142,60 @@ func (h *SongHandler) ValidateAudioPaths(c *gin.Context) {
 		"issues":  []string{},
 	}
 
-	// Check vocals stem
-	if song.VocalsStemPath != "" {
-		if _, err := os.Stat(song.VocalsStemPath); os.IsNotExist(err) {
-			result["valid"] = false
-			result["vocals_missing"] = song.VocalsStemPath
-
-			// Try to find similar files
-			if suggested := findSimilarFile(song.VocalsStemPath); suggested != "" {
-				result["vocals_suggested"] = suggested
-			}
-		} else {
-			result["vocals_ok"] = song.VocalsStemPath
-		}
+	// Check vocals stem using convention-based path
+	if vocalPath := utils.GetSongVocalPath(song.ID); vocalPath != "" {
+		result["vocals_ok"] = fmt.Sprintf("song_%d/vocal", song.ID)
 	}
 
-	// Check music stem
-	if song.MusicStemPath != "" {
-		if _, err := os.Stat(song.MusicStemPath); os.IsNotExist(err) {
-			result["valid"] = false
-			result["music_missing"] = song.MusicStemPath
-
-			// Try to find similar files
-			if suggested := findSimilarFile(song.MusicStemPath); suggested != "" {
-				result["music_suggested"] = suggested
-			}
-		} else {
-			result["music_ok"] = song.MusicStemPath
-		}
+	// Check music stem using convention-based path
+	if musicPath := utils.GetSongMusicPath(song.ID); musicPath != "" {
+		result["music_ok"] = fmt.Sprintf("song_%d/music", song.ID)
 	}
 
-	// Check mixed audio
-	if song.MixedAudioPath != "" {
-		if _, err := os.Stat(song.MixedAudioPath); os.IsNotExist(err) {
-			result["valid"] = false
-			result["mixed_missing"] = song.MixedAudioPath
+	// Check mixed audio using convention-based path
+	if mixedPath := utils.GetSongMixedPath(song.ID); mixedPath != "" {
+		result["mixed_ok"] = fmt.Sprintf("song_%d/mixed", song.ID)
+	}
 
-			if suggested := findSimilarFile(song.MixedAudioPath); suggested != "" {
-				result["mixed_suggested"] = suggested
-			}
-		} else {
-			result["mixed_ok"] = song.MixedAudioPath
-		}
+	// Check if any audio exists
+	if !utils.HasSongAudio(song.ID) {
+		result["valid"] = false
+		result["error"] = "No audio files found for this song"
 	}
 
 	c.JSON(http.StatusOK, result)
 }
 
-// findSimilarFile attempts to find a similar file in the same directory
-func findSimilarFile(missingPath string) string {
-	dir := filepath.Dir(missingPath)
-	baseName := filepath.Base(missingPath)
-	ext := filepath.Ext(baseName)
-	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-
-	// Check if directory exists
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return ""
-	}
-
-	// List files in directory
-	entries, err := os.ReadDir(dir)
+// GetRenderLog returns the render log for a song
+func (h *SongHandler) GetRenderLog(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		return ""
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
 	}
 
-	// Look for files with similar names
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
+	// Build log file path: /storage/logs/{song_id}/log.txt
+	logPath := filepath.Join(h.config.LogsPath, fmt.Sprintf("%d", id), "log.txt")
 
-		fileName := entry.Name()
-
-		// Check if it has the same extension and contains similar name parts
-		if filepath.Ext(fileName) == ext {
-			// Case-insensitive substring match
-			if strings.Contains(strings.ToLower(fileName), strings.ToLower(nameWithoutExt)) ||
-				strings.Contains(strings.ToLower(nameWithoutExt), strings.ToLower(strings.TrimSuffix(fileName, ext))) {
-				return filepath.Join(dir, fileName)
-			}
-		}
+	// Check if log exists
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "No render log found for this song",
+			"path":  logPath,
+		})
+		return
 	}
 
-	return ""
+	// Read log file
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read log: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"song_id": id,
+		"log":     string(content),
+		"path":    logPath,
+	})
 }

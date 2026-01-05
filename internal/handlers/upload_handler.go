@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -43,7 +44,8 @@ func (h *UploadHandler) UploadAudio(c *gin.Context) {
 	}
 
 	// Create storage directory for this song's audio files
-	audioDir := filepath.Join("storage", "audio", fmt.Sprintf("song_%d", id))
+	songAudioDir := fmt.Sprintf("song_%d", id)
+	audioDir := filepath.Join(utils.GetAudioPath(), songAudioDir)
 	if err := os.MkdirAll(audioDir, 0755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create storage directory: " + err.Error()})
 		return
@@ -62,8 +64,16 @@ func (h *UploadHandler) UploadAudio(c *gin.Context) {
 			ext = ".mp3" // default
 		}
 
-		// Save vocals file
-		vocalsPath := filepath.Join(audioDir, "vocals"+ext)
+		// Remove any existing vocal files with different extensions
+		for _, oldExt := range []string{".wav", ".mp3", ".flac", ".m4a"} {
+			oldPath := filepath.Join(audioDir, "vocal"+oldExt)
+			if oldExt != ext {
+				os.Remove(oldPath) // Ignore errors if file doesn't exist
+			}
+		}
+
+		// Save vocals file with absolute path
+		vocalsPath := filepath.Join(audioDir, "vocal"+ext)
 		destFile, err := os.Create(vocalsPath)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save vocals file: " + err.Error()})
@@ -76,10 +86,8 @@ func (h *UploadHandler) UploadAudio(c *gin.Context) {
 			return
 		}
 
-		// Get absolute path
-		absPath, _ := filepath.Abs(vocalsPath)
-		song.VocalsStemPath = absPath
-		updatedPaths["vocals"] = absPath
+		// File saved successfully
+		updatedPaths["vocals"] = vocalsPath
 	}
 
 	// Handle music/instrumental file upload
@@ -93,7 +101,15 @@ func (h *UploadHandler) UploadAudio(c *gin.Context) {
 			ext = ".mp3" // default
 		}
 
-		// Save music file
+		// Remove any existing music files with different extensions
+		for _, oldExt := range []string{".wav", ".mp3", ".flac", ".m4a"} {
+			oldPath := filepath.Join(audioDir, "music"+oldExt)
+			if oldExt != ext {
+				os.Remove(oldPath) // Ignore errors if file doesn't exist
+			}
+		}
+
+		// Save music file with absolute path
 		musicPath := filepath.Join(audioDir, "music"+ext)
 		destFile, err := os.Create(musicPath)
 		if err != nil {
@@ -107,27 +123,22 @@ func (h *UploadHandler) UploadAudio(c *gin.Context) {
 			return
 		}
 
-		// Get absolute path
-		absPath, _ := filepath.Abs(musicPath)
-		song.MusicStemPath = absPath
-		updatedPaths["music"] = absPath
+		// File saved successfully
+		updatedPaths["music"] = musicPath
 	}
 
+	// Check if at least one file was uploaded
 	// Check if at least one file was uploaded
 	if len(updatedPaths) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No audio files provided. Include 'vocals' and/or 'music' in the form data."})
 		return
 	}
 
-	// Update song in database
-	if err := h.songRepo.Update(song); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update song: " + err.Error()})
-		return
-	}
+	// No need to update database - paths are convention-based
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":        "Audio files uploaded successfully",
-		"song":           song,
+		"song_id":        id,
 		"uploaded_paths": updatedPaths,
 	})
 }

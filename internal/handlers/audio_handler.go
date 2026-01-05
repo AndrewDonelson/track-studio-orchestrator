@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
-	"os"
 	"strconv"
 
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services/ai"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/utils"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/audio"
 	"github.com/gin-gonic/gin"
 )
@@ -13,11 +15,15 @@ import (
 // AudioHandler handles audio analysis requests
 type AudioHandler struct {
 	songRepo *database.SongRepository
+	aiClient *ai.Client
 }
 
 // NewAudioHandler creates a new audio handler
-func NewAudioHandler(songRepo *database.SongRepository) *AudioHandler {
-	return &AudioHandler{songRepo: songRepo}
+func NewAudioHandler(songRepo *database.SongRepository, aiClient *ai.Client) *AudioHandler {
+	return &AudioHandler{
+		songRepo: songRepo,
+		aiClient: aiClient,
+	}
 }
 
 // AnalyzeSong performs audio analysis on a song's audio files
@@ -40,23 +46,10 @@ func (h *AudioHandler) AnalyzeSong(c *gin.Context) {
 		return
 	}
 
-	// Determine which audio file to analyze (prefer instrumental for BPM)
-	audioPath := song.MusicStemPath
+	// Get audio file path using convention (prefer instrumental for BPM)
+	audioPath := utils.GetSongAudioPath(id)
 	if audioPath == "" {
-		audioPath = song.VocalsStemPath
-	}
-	if audioPath == "" {
-		audioPath = song.MixedAudioPath
-	}
-
-	if audioPath == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No audio file available for analysis"})
-		return
-	}
-
-	// Check if file exists
-	if _, err := os.Stat(audioPath); os.IsNotExist(err) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Audio file not found. Please upload audio files first."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No audio file available for analysis. Please upload audio files first."})
 		return
 	}
 
@@ -82,8 +75,27 @@ func (h *AudioHandler) AnalyzeSong(c *gin.Context) {
 		return
 	}
 
+	// Perform AI metadata enrichment (if AI client is configured)
+	var enrichment interface{} = nil
+	if h.aiClient != nil {
+		log.Printf("Enriching metadata for song %d after analysis", id)
+		enrich, err := h.aiClient.EnrichSongMetadata(song)
+		if err != nil {
+			log.Printf("Warning: Failed to enrich metadata: %v", err)
+			// Don't fail the whole request, just log and continue
+		} else {
+			// Save enrichment to database
+			if err := h.songRepo.UpdateMetadataEnrichment(id, enrich); err != nil {
+				log.Printf("Warning: Failed to save enrichment: %v", err)
+			} else {
+				enrichment = enrich
+				log.Printf("Successfully enriched metadata for song %d", id)
+			}
+		}
+	}
+
 	// Return the updated song with analysis results
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"song": song,
 		"analysis": gin.H{
 			"duration_seconds":    analysis.DurationSeconds,
@@ -94,5 +106,11 @@ func (h *AudioHandler) AnalyzeSong(c *gin.Context) {
 			"beat_count":          analysis.BeatCount,
 			"vocal_segment_count": analysis.VocalSegmentCount,
 		},
-	})
+	}
+
+	if enrichment != nil {
+		response["enrichment"] = enrichment
+	}
+
+	c.JSON(http.StatusOK, response)
 }

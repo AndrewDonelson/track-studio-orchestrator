@@ -13,6 +13,7 @@ import (
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/handlers"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services/ai"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/utils"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/worker"
 	"github.com/gin-gonic/gin"
@@ -57,19 +58,24 @@ func main() {
 	// Create progress broadcaster for live updates
 	broadcaster := services.NewProgressBroadcaster()
 
+	// Create AI client for metadata enrichment
+	aiClient := ai.NewClient()
+	log.Println("AI client initialized")
+
 	// Create handlers
-	songHandler := handlers.NewSongHandler(songRepo)
+	songHandler := handlers.NewSongHandler(songRepo, cfg)
 	queueHandler := handlers.NewQueueHandler(queueRepo, broadcaster)
 	progressHandler := handlers.NewProgressHandler(broadcaster, queueRepo)
-	imageHandler := handlers.NewImageHandler()
-	audioHandler := handlers.NewAudioHandler(songRepo)
+	imageHandler := handlers.NewImageHandler(settingsRepo)
+	audioHandler := handlers.NewAudioHandler(songRepo, aiClient)
 	uploadHandler := handlers.NewUploadHandler(songRepo)
 	dashboardHandler := handlers.NewDashboardHandler(database.DB)
 	videoHandler := handlers.NewVideoHandler(videoRepo)
 	settingsHandler := handlers.NewSettingsHandler(settingsRepo)
+	enrichmentHandler := handlers.NewEnrichmentHandler(songRepo, aiClient)
 
 	// Create and start queue worker
-	queueWorker := worker.NewWorker(queueRepo, songRepo, broadcaster, 5*time.Second)
+	queueWorker := worker.NewWorker(queueRepo, songRepo, broadcaster, 5*time.Second, cfg)
 	go queueWorker.Start()
 	log.Println("Queue worker started (polling every 5 seconds)")
 
@@ -114,6 +120,16 @@ func main() {
 	router.Static("/images", imagesPath)
 	log.Printf("Serving images from: %s", imagesPath)
 
+	// Serve static audio files
+	audioPath := utils.GetAudioPath()
+	router.Static("/audio", audioPath)
+	log.Printf("Serving audio from: %s", audioPath)
+
+	// Serve branding files (logos, etc.)
+	brandingPath := filepath.Join(utils.GetDataPath(), "branding")
+	router.Static("/branding", brandingPath)
+	log.Printf("Serving branding from: %s", brandingPath)
+
 	// API v1 group
 	v1 := router.Group("/api/v1")
 	{
@@ -132,6 +148,9 @@ func main() {
 			// Validation endpoint
 			songs.GET("/:id/validate-paths", songHandler.ValidateAudioPaths)
 
+			// Render log endpoint
+			songs.GET("/:id/render-log", songHandler.GetRenderLog)
+
 			// Image endpoints for songs
 			songs.GET("/:id/images", imageHandler.GetImagesBySong)
 			songs.POST("/:id/images", imageHandler.CreateImagePrompt)
@@ -140,6 +159,16 @@ func main() {
 			// Audio analysis endpoint
 			songs.POST("/:id/analyze", audioHandler.AnalyzeSong) // Audio upload endpoint
 			songs.POST("/:id/upload-audio", uploadHandler.UploadAudio)
+
+			// Metadata enrichment endpoints
+			songs.POST("/:id/enrich-metadata", enrichmentHandler.EnrichSongMetadata)
+		}
+
+		// Enrichment endpoints
+		enrichment := v1.Group("/enrichment")
+		{
+			enrichment.POST("/batch", enrichmentHandler.EnrichBatch)
+			enrichment.GET("/status", enrichmentHandler.GetEnrichmentStatus)
 		}
 
 		// Images endpoints
@@ -181,6 +210,7 @@ func main() {
 		// Settings endpoints
 		v1.GET("/settings", settingsHandler.Get)
 		v1.POST("/settings", settingsHandler.Update)
+		v1.POST("/settings/upload-logo", settingsHandler.UploadLogo)
 
 		// Albums endpoints (placeholder)
 		albums := v1.Group("/albums")

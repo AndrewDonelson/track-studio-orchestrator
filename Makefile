@@ -14,9 +14,9 @@ GOARCH ?= amd64
 GO_BUILD_FLAGS := -ldflags="-s -w -X main.Version=$(VERSION)"
 
 # Deployment targets
-MULE_HOST := mule.nlaakstudios
-MULE_USER := andrew
-MULE_PATH := /home/$(MULE_USER)/trackstudio/orchestrator
+MULE_HOST := andrew@192.168.1.200
+MULE_PATH := /home/andrew/trackstudio/orchestrator
+MULE_DATA_PATH := /home/andrew/track-studio-data
 MULE_SERVICE := track-studio-orchestrator
 
 # Colors for output
@@ -70,6 +70,9 @@ build:
 	@echo "$(COLOR_GREEN)Building $(APP_NAME) v$(VERSION)...$(COLOR_RESET)"
 	@mkdir -p $(BUILD_DIR)
 	go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
+	@echo "$(COLOR_GREEN)Copying Python scripts to data directory...$(COLOR_RESET)"
+	@mkdir -p ~/track-studio-data/python-scripts
+	@cp -r python-scripts/* ~/track-studio-data/python-scripts/
 	@echo "$(COLOR_GREEN)✓ Build complete: $(BUILD_DIR)/$(BINARY_NAME)$(COLOR_RESET)"
 
 ## build-linux: Build for Linux (production)

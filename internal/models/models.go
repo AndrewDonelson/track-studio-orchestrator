@@ -43,6 +43,7 @@ type Song struct {
 	LyricsKaraoke  string `json:"lyrics_karaoke,omitempty" db:"lyrics_karaoke"` // Formatted lyrics for karaoke display (no section labels)
 	LyricsDisplay  string `json:"lyrics_display" db:"lyrics_display"`           // JSON
 	LyricsSections string `json:"lyrics_sections" db:"lyrics_sections"`         // JSON
+	WhisperEngine  string `json:"whisper_engine,omitempty" db:"whisper_engine"` // Which engine was used: whisperx, faster-whisper
 
 	// Audio analysis
 	BPM             float64 `json:"bpm" db:"bpm"`
@@ -72,6 +73,21 @@ type Song struct {
 	KaraokeHighlightBorderColor string `json:"karaoke_highlight_border_color" db:"karaoke_highlight_border_color"`
 	KaraokeAlignment            int    `json:"karaoke_alignment" db:"karaoke_alignment"`
 	KaraokeMarginBottom         int    `json:"karaoke_margin_bottom" db:"karaoke_margin_bottom"`
+
+	// AI-powered metadata enrichment
+	GenrePrimary       string     `json:"genre_primary,omitempty" db:"genre_primary"`
+	GenreSecondary     string     `json:"genre_secondary,omitempty" db:"genre_secondary"`     // JSON array
+	Tags               string     `json:"tags,omitempty" db:"tags"`                           // JSON array
+	StyleDescriptors   string     `json:"style_descriptors,omitempty" db:"style_descriptors"` // JSON array
+	Mood               string     `json:"mood,omitempty" db:"mood"`                           // JSON array
+	Themes             string     `json:"themes,omitempty" db:"themes"`                       // JSON array
+	SimilarArtists     string     `json:"similar_artists,omitempty" db:"similar_artists"`     // JSON array
+	Summary            string     `json:"summary,omitempty" db:"summary"`
+	TargetAudience     string     `json:"target_audience,omitempty" db:"target_audience"`
+	EnergyLevel        string     `json:"energy_level,omitempty" db:"energy_level"`
+	VocalStyle         string     `json:"vocal_style,omitempty" db:"vocal_style"`
+	MetadataEnrichedAt *time.Time `json:"metadata_enriched_at,omitempty" db:"metadata_enriched_at"`
+	MetadataVersion    int        `json:"metadata_version,omitempty" db:"metadata_version"`
 }
 
 // QueueItem represents a job in the processing queue
@@ -190,4 +206,48 @@ type Settings struct {
 	DataStoragePath      string    `json:"data_storage_path" db:"data_storage_path"`
 	CreatedAt            time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// AllowedGenres are the 15 standardized music genres for TrackStudio
+var AllowedGenres = []string{
+	"Pop",
+	"Rock",
+	"Hip-Hop/Rap",
+	"Country",
+	"R&B/Soul",
+	"Electronic/Dance",
+	"Latin",
+	"Metal",
+	"Jazz",
+	"Blues",
+	"Folk",
+	"Classical",
+	"Reggae",
+	"Gospel/Christian",
+	"Ballad",
+}
+
+// IsValidGenre checks if a genre is in the allowed list
+func IsValidGenre(genre string) bool {
+	for _, allowed := range AllowedGenres {
+		if allowed == genre {
+			return true
+		}
+	}
+	return false
+}
+
+// SongMetadataEnrichment represents AI-generated metadata for a song
+type SongMetadataEnrichment struct {
+	GenrePrimary     string   `json:"genre_primary"`
+	GenreSecondary   []string `json:"genre_secondary"`
+	Tags             []string `json:"tags"`
+	StyleDescriptors []string `json:"style_descriptors"`
+	Mood             []string `json:"mood"`
+	Themes           []string `json:"themes"`
+	SimilarArtists   []string `json:"similar_artists"`
+	Summary          string   `json:"summary"`
+	TargetAudience   string   `json:"target_audience"`
+	EnergyLevel      string   `json:"energy_level"`
+	VocalStyle       string   `json:"vocal_style"`
 }

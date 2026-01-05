@@ -18,10 +18,13 @@ import (
 )
 
 type ImageHandler struct {
+	settingsRepo *database.SettingsRepository
 }
 
-func NewImageHandler() *ImageHandler {
-	return &ImageHandler{}
+func NewImageHandler(settingsRepo *database.SettingsRepository) *ImageHandler {
+	return &ImageHandler{
+		settingsRepo: settingsRepo,
+	}
 }
 
 // GetImagesBySong returns all images for a song
@@ -146,9 +149,25 @@ func (h *ImageHandler) RegenerateImage(c *gin.Context) {
 func (h *ImageHandler) regenerateImageAsync(img *models.GeneratedImage) {
 	log.Printf("Starting image regeneration for ID %d", img.ID)
 
+	// Load settings for master prompts
+	settings, err := h.settingsRepo.Get()
+	if err != nil {
+		log.Printf("Warning: failed to load settings: %v, using defaults", err)
+	}
+
 	// Setup image generator with the correct output directory
 	outputDir := filepath.Join(utils.GetImagesPath(), fmt.Sprintf("song_%d", img.SongID))
 	imageGen := image.NewImageGenerator(outputDir)
+
+	// Set master prompts from settings if available
+	if settings != nil {
+		if settings.MasterPrompt != "" {
+			imageGen.MasterPrompt = settings.MasterPrompt
+		}
+		if settings.MasterNegativePrompt != "" {
+			imageGen.MasterNegative = settings.MasterNegativePrompt
+		}
+	}
 
 	// Generate filename based on image type if path is empty
 	var filename string
@@ -214,18 +233,34 @@ func (h *ImageHandler) GeneratePromptFromLyrics(c *gin.Context) {
 		return
 	}
 
+	// Load settings for master prompts
+	settings, err := h.settingsRepo.Get()
+	if err != nil {
+		log.Printf("Warning: failed to load settings: %v, using defaults", err)
+	}
+
 	// Create temporary image generator just for prompt enhancement
 	imageGen := image.NewImageGenerator("")
+
+	// Set master prompts from settings if available
+	if settings != nil {
+		if settings.MasterPrompt != "" {
+			imageGen.MasterPrompt = settings.MasterPrompt
+		}
+		if settings.MasterNegativePrompt != "" {
+			imageGen.MasterNegative = settings.MasterNegativePrompt
+		}
+	}
 
 	// Build style keywords
 	styleKeywords := image.BuildStyleKeywords(req.Genre, req.BackgroundStyle)
 
 	// Use the LLM to enhance the prompt based on lyrics
 	log.Printf("Generating prompt for %s section from lyrics", req.SectionType)
-	enhancedPrompt, err := imageGen.EnhancePromptWithLLM(req.SectionType, req.Lyrics, styleKeywords)
-	if err != nil {
-		log.Printf("Error generating prompt: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate prompt: " + err.Error()})
+	enhancedPrompt, promptErr := imageGen.EnhancePromptWithLLM(req.SectionType, req.Lyrics, styleKeywords)
+	if promptErr != nil {
+		log.Printf("Error generating prompt: %v", promptErr)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate prompt: " + promptErr.Error()})
 		return
 	}
 

@@ -126,7 +126,57 @@ def create_karaoke_ass(timestamps_json, output_ass, lyrics_text=None, config=Kar
     segments = data['segments']
     
     if lyrics_text:
-        actual_lyrics_lines = [line.strip() for line in lyrics_text.split('\n') if line.strip()]
+        # Filter out lines starting with [ or ( (section markers and descriptions)
+        # Also filter out lines that are primarily parenthetical descriptions
+        filtered_lines = []
+        for line in lyrics_text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            # Skip lines starting with [ or (
+            if line.startswith('[') or line.startswith('('):
+                continue
+            # Skip lines that are primarily parenthetical (more than 50% in parens)
+            if '(' in line and ')' in line:
+                # Count content in parentheses
+                in_parens = 0
+                paren_depth = 0
+                for c in line:
+                    if c == '(':
+                        paren_depth += 1
+                    elif c == ')':
+                        paren_depth -= 1
+                    elif paren_depth > 0:
+                        in_parens += 1
+                # If more than 50% is in parentheses, skip it
+                if in_parens > len(line) * 0.5:
+                    continue
+            filtered_lines.append(line)
+        
+        # Split long lines (50+ chars) at commas near the center
+        actual_lyrics_lines = []
+        for line in filtered_lines:
+            if len(line) >= 50:
+                # Find comma closest to center (around position 25)
+                center = len(line) // 2
+                comma_positions = [i for i, c in enumerate(line) if c == ',']
+                
+                if comma_positions:
+                    # Find comma closest to center
+                    closest_comma = min(comma_positions, key=lambda x: abs(x - center))
+                    # Split at comma if it's reasonably centered (within 40% to 60% of line)
+                    if 0.4 * len(line) <= closest_comma <= 0.6 * len(line):
+                        part1 = line[:closest_comma + 1].strip()
+                        part2 = line[closest_comma + 1:].strip()
+                        actual_lyrics_lines.append(part1)
+                        actual_lyrics_lines.append(part2)
+                    else:
+                        actual_lyrics_lines.append(line)
+                else:
+                    actual_lyrics_lines.append(line)
+            else:
+                actual_lyrics_lines.append(line)
+        
         # Align actual lyrics with Whisper timing data
         segments = align_lyrics_with_timings(data['segments'], actual_lyrics_lines)
     

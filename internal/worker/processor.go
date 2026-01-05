@@ -10,12 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AndrewDonelson/track-studio-orchestrator/config"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/utils"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/audio"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/image"
+	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/logger"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/lyrics"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/video"
 )
@@ -24,16 +26,19 @@ import (
 type Processor struct {
 	songRepo    *database.SongRepository
 	broadcaster *services.ProgressBroadcaster
+	config      *config.Config
 }
 
 // NewProcessor creates a new processor
 func NewProcessor(
 	songRepo *database.SongRepository,
 	broadcaster *services.ProgressBroadcaster,
+	cfg *config.Config,
 ) *Processor {
 	return &Processor{
 		songRepo:    songRepo,
 		broadcaster: broadcaster,
+		config:      cfg,
 	}
 }
 
@@ -41,36 +46,89 @@ func NewProcessor(
 func (p *Processor) Process(item *models.QueueItem, song *models.Song) error {
 	log.Printf("Starting processing pipeline for song: %s", song.Title)
 
+	// Reload song from database to ensure we have the latest settings
+	freshSong, err := p.songRepo.GetByID(song.ID)
+	if err != nil {
+		return fmt.Errorf("failed to reload song from database: %w", err)
+	}
+	song = freshSong // Use the freshly loaded song data
+	log.Printf("Reloaded song %d from database with latest settings", song.ID)
+
+	// Create render logger
+	renderLog, err := logger.NewRenderLogger(p.config.StoragePath, int(song.ID))
+	if err != nil {
+		log.Printf("Warning: failed to create render logger: %v", err)
+		renderLog = nil // Continue without logging
+	}
+
+	if renderLog != nil {
+		renderLog.Info("Starting video generation pipeline for: %s", song.Title)
+		renderLog.Property("Song ID", song.ID)
+		renderLog.Property("Title", song.Title)
+		renderLog.Property("Artist", song.ArtistName)
+		defer func() {
+			if r := recover(); r != nil {
+				renderLog.Error("Pipeline panicked: %v", r)
+				renderLog.Close(false, fmt.Sprintf("Panic: %v", r))
+			}
+		}()
+	}
+
 	// Phase 1: Audio Analysis (0-20%)
-	if err := p.analyzeAudio(item, song); err != nil {
+	if err := p.analyzeAudio(item, song, renderLog); err != nil {
+		if renderLog != nil {
+			renderLog.Error("Audio analysis failed: %v", err)
+			renderLog.Close(false, err.Error())
+		}
 		return fmt.Errorf("audio analysis failed: %w", err)
 	}
 
 	// Phase 2: Lyrics Processing (20-30%)
-	if err := p.processLyrics(item, song); err != nil {
+	if err := p.processLyrics(item, song, renderLog); err != nil {
+		if renderLog != nil {
+			renderLog.Error("Lyrics processing failed: %v", err)
+			renderLog.Close(false, err.Error())
+		}
 		return fmt.Errorf("lyrics processing failed: %w", err)
 	}
 
 	// Phase 3: Image Generation (30-50%)
-	if err := p.generateImages(item, song); err != nil {
+	if err := p.generateImages(item, song, renderLog); err != nil {
+		if renderLog != nil {
+			renderLog.Error("Image generation failed: %v", err)
+			renderLog.Close(false, err.Error())
+		}
 		return fmt.Errorf("image generation failed: %w", err)
 	}
 
 	// Phase 4: Video Rendering (50-90%)
-	if err := p.renderVideo(item, song); err != nil {
+	if err := p.renderVideo(item, song, renderLog); err != nil {
+		if renderLog != nil {
+			renderLog.Error("Video rendering failed: %v", err)
+			renderLog.Close(false, err.Error())
+		}
 		return fmt.Errorf("video rendering failed: %w", err)
 	}
 
 	// Phase 5: YouTube Upload (90-100%)
-	if err := p.uploadToYouTube(item, song); err != nil {
+	if err := p.uploadToYouTube(item, song, renderLog); err != nil {
+		if renderLog != nil {
+			renderLog.Error("YouTube upload failed: %v", err)
+			renderLog.Close(false, err.Error())
+		}
 		return fmt.Errorf("youtube upload failed: %w", err)
+	}
+
+	if renderLog != nil {
+		renderLog.Success("Video generation pipeline completed successfully")
+		renderLog.Close(true, "All phases completed without errors")
 	}
 
 	return nil
 }
 
 // analyzeAudio performs audio analysis using librosa
-func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) error {
+func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song, renderLog *logger.RenderLogger) error {
 	// Check if audio analysis already exists
 	if song.BPM > 0 && song.Key != "" && song.DurationSeconds > 0 {
 		log.Printf("Audio analysis already exists for song %s, skipping", song.Title)
@@ -80,19 +138,21 @@ func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) erro
 
 	p.updateProgress(item, "Analyzing audio", 5, "Loading audio files")
 
-	// For BPM/tempo analysis, use instrumental track (more accurate rhythm detection)
-	// For vocal timing, use vocals track
-	bpmAudioPath := song.MusicStemPath
-	vocalAudioPath := song.VocalsStemPath
+	// Get audio paths using convention-based lookup
+	// For BPM/tempo analysis, prefer music stem (more accurate rhythm detection)
+	bpmAudioPath := utils.GetSongMusicPath(int(song.ID))
+	if bpmAudioPath == "" {
+		bpmAudioPath = utils.GetSongAudioPath(int(song.ID))
+	}
+
+	// For vocal timing, prefer vocal stem
+	vocalAudioPath := utils.GetSongVocalPath(int(song.ID))
+	if vocalAudioPath == "" {
+		vocalAudioPath = utils.GetSongAudioPath(int(song.ID))
+	}
 
 	if bpmAudioPath == "" {
-		bpmAudioPath = song.MixedAudioPath
-	}
-	if vocalAudioPath == "" {
-		vocalAudioPath = song.MixedAudioPath
-	}
-	if bpmAudioPath == "" {
-		return fmt.Errorf("no audio file available for analysis")
+		return fmt.Errorf("no audio file available for analysis - please upload audio files first")
 	}
 
 	p.updateProgress(item, "Analyzing audio", 10, "Running audio analysis (BPM, key, timing)")
@@ -151,16 +211,41 @@ func (p *Processor) analyzeAudio(item *models.QueueItem, song *models.Song) erro
 }
 
 // processLyrics processes and times the lyrics
-func (p *Processor) processLyrics(item *models.QueueItem, song *models.Song) error {
+func (p *Processor) processLyrics(item *models.QueueItem, song *models.Song, renderLog *logger.RenderLogger) error {
+	if renderLog != nil {
+		renderLog.Phase("LYRICS PROCESSING", "Parsing and timing lyrics")
+		renderLog.Property("Song ID", song.ID)
+		renderLog.Property("Raw Lyrics Length", len(song.Lyrics))
+		renderLog.Property("Karaoke Lyrics Length", len(song.LyricsKaraoke))
+		firstLines := song.LyricsKaraoke
+		if len(firstLines) > 200 {
+			firstLines = firstLines[:200] + "..."
+		}
+		renderLog.Debug("Karaoke Lyrics Preview: %s", firstLines)
+	}
 	p.updateProgress(item, "Processing lyrics", 22, "Parsing lyrics structure")
 
 	// Parse lyrics to detect sections
-	lyricsData, err := lyrics.ParseLyrics(song.Lyrics)
+	if renderLog != nil {
+		renderLog.Info("Parsing lyrics to detect sections...")
+	}
+	lyricsData, err := lyrics.ParseLyrics(song.LyricsKaraoke)
 	if err != nil {
+		if renderLog != nil {
+			renderLog.Error("Failed to parse lyrics: %v", err)
+		}
 		return fmt.Errorf("failed to parse lyrics: %w", err)
 	}
 
 	log.Printf("Parsed lyrics for %s: %s", song.Title, lyricsData.GetSectionSummary())
+
+	if renderLog != nil {
+		renderLog.Success("Lyrics parsed successfully")
+		renderLog.Property("Number of Sections", len(lyricsData.Sections))
+		for i, section := range lyricsData.Sections {
+			renderLog.Debug("  Section %d: type=%s, lines=%d", i+1, section.Type, len(section.Lines))
+		}
+	}
 
 	p.updateProgress(item, "Processing lyrics", 25, "Aligning lyrics with audio timing")
 
@@ -169,46 +254,95 @@ func (p *Processor) processLyrics(item *models.QueueItem, song *models.Song) err
 	// In production, this would use the beat_times from audio analysis
 	beatTimes := []float64{} // Will be populated from audio analysis in future
 
-	timedLines, err := lyrics.AlignLyricsToBeats(song.Lyrics, beatTimes, song.DurationSeconds)
+	if renderLog != nil {
+		renderLog.Info("Aligning lyrics to audio timing...")
+		renderLog.Property("Song Duration", fmt.Sprintf("%.2fs", song.DurationSeconds))
+		renderLog.Property("Beat Times Available", len(beatTimes))
+	}
+
+	timedLines, err := lyrics.AlignLyricsToBeats(song.LyricsKaraoke, beatTimes, song.DurationSeconds)
 	if err != nil {
+		if renderLog != nil {
+			renderLog.Error("Failed to align lyrics: %v", err)
+		}
 		return fmt.Errorf("failed to align lyrics: %w", err)
 	}
 
 	log.Printf("Aligned %d lyrics lines to audio timing", len(timedLines))
 
+	if renderLog != nil {
+		renderLog.Success("Lyrics aligned to audio timing")
+		renderLog.Property("Timed Lines", len(timedLines))
+	}
+
 	// Store processed lyrics data
 	sectionsJSON, err := json.Marshal(lyricsData.Sections)
 	if err != nil {
 		log.Printf("Warning: failed to marshal sections: %v", err)
+		if renderLog != nil {
+			renderLog.Error("Failed to marshal sections: %v", err)
+		}
 	} else {
 		song.LyricsSections = string(sectionsJSON)
+		if renderLog != nil {
+			renderLog.Debug("Stored sections JSON (%d bytes)", len(sectionsJSON))
+		}
 	}
 
 	timedLinesJSON, err := json.Marshal(timedLines)
 	if err != nil {
 		log.Printf("Warning: failed to marshal timed lines: %v", err)
+		if renderLog != nil {
+			renderLog.Error("Failed to marshal timed lines: %v", err)
+		}
 	} else {
 		song.LyricsDisplay = string(timedLinesJSON)
+		if renderLog != nil {
+			renderLog.Debug("Stored timed lines JSON (%d bytes)", len(timedLinesJSON))
+		}
 	}
 
 	// Save updated song data
+	if renderLog != nil {
+		renderLog.Info("Saving processed lyrics to database...")
+	}
 	if err := p.songRepo.Update(song); err != nil {
 		log.Printf("Warning: failed to save lyrics processing results: %v", err)
+		if renderLog != nil {
+			renderLog.Error("Failed to save to database: %v", err)
+		}
+	} else {
+		if renderLog != nil {
+			renderLog.Success("Lyrics data saved to database")
+		}
 	}
 
 	p.updateProgress(item, "Processing lyrics", 30, fmt.Sprintf("Processed %d sections, %d lines", len(lyricsData.Sections), len(timedLines)))
 
 	log.Printf("Lyrics processing complete for song: %s", song.Title)
+	if renderLog != nil {
+		renderLog.Success("Lyrics processing phase complete")
+	}
 	return nil
 }
 
 // generateImages generates background images via CQAI for each unique section
-func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) error {
+func (p *Processor) generateImages(item *models.QueueItem, song *models.Song, renderLog *logger.RenderLogger) error {
+	if renderLog != nil {
+		renderLog.Phase("IMAGE GENERATION", "Generating background images via CQAI")
+		renderLog.Property("Song ID", song.ID)
+		renderLog.Property("Song Title", song.Title)
+	}
 	p.updateProgress(item, "Generating images", 30, "Scanning for existing images")
 
 	// Get images directory
 	outputDir := filepath.Join(utils.GetImagesPath(), fmt.Sprintf("song_%d", song.ID))
 	imageGen := image.NewImageGenerator(outputDir)
+
+	if renderLog != nil {
+		renderLog.Property("Image Output Directory", outputDir)
+		renderLog.Info("Checking for existing images on disk...")
+	}
 
 	// Step 1: Check for existing image FILES on disk
 	existingFiles := make(map[string]string) // filename -> full path
@@ -219,15 +353,39 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 				if !file.IsDir() && strings.HasSuffix(file.Name(), ".png") {
 					existingFiles[file.Name()] = filepath.Join(outputDir, file.Name())
 					log.Printf("Found existing image file: %s", file.Name())
+					if renderLog != nil {
+						renderLog.Debug("Found existing image file: %s", file.Name())
+					}
 				}
 			}
 		}
 	}
 
+	if renderLog != nil {
+		renderLog.Property("Existing Files on Disk", len(existingFiles))
+	}
+
 	// Step 2: Check database for existing image prompts
+	if renderLog != nil {
+		renderLog.Info("Checking database for existing image prompts...")
+	}
 	existingImages, err := database.GetImagesBySongID(song.ID)
 	if err != nil {
+		if renderLog != nil {
+			renderLog.Error("Failed to get existing images from database: %v", err)
+		}
 		return fmt.Errorf("failed to get existing images: %w", err)
+	}
+
+	if renderLog != nil {
+		renderLog.Property("Image Prompts in Database", len(existingImages))
+		for i, img := range existingImages {
+			renderLog.Info("Image %d: type=%s, seq=%d, has_file=%v", i+1, img.ImageType, img.SequenceNumber, img.ImagePath != "")
+			renderLog.Property(fmt.Sprintf("  Prompt[%d]", i+1), img.Prompt)
+			if img.NegativePrompt != nil && *img.NegativePrompt != "" {
+				renderLog.Property(fmt.Sprintf("  Negative[%d]", i+1), *img.NegativePrompt)
+			}
+		}
 	}
 
 	// Step 3: Reverse-engineer prompts from orphaned image files (files without database entries)
@@ -486,7 +644,11 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 }
 
 // renderVideo renders the final video
-func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error {
+func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song, renderLog *logger.RenderLogger) error {
+	if renderLog != nil {
+		renderLog.Phase("VIDEO RENDERING", "Composing final video with FFmpeg")
+	}
+
 	p.updateProgress(item, "Rendering video", 55, "Preparing video assets")
 
 	// Setup paths
@@ -494,40 +656,66 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 	videoPath := filepath.Join(outputDir, fmt.Sprintf("%s.mp4",
 		strings.ReplaceAll(song.Title, " ", "_")))
 
-	// Get audio path - need to mix vocals and instrumental
-	audioPath := ""
-	if song.VocalsStemPath != "" && song.MusicStemPath != "" {
-		// Validate both stem files exist before attempting to mix
-		if _, err := os.Stat(song.VocalsStemPath); os.IsNotExist(err) {
-			return fmt.Errorf("vocals stem file not found: %s - please update the file path in the song settings", song.VocalsStemPath)
-		}
-		if _, err := os.Stat(song.MusicStemPath); os.IsNotExist(err) {
-			return fmt.Errorf("music stem file not found: %s - please update the file path in the song settings", song.MusicStemPath)
-		}
+	if renderLog != nil {
+		renderLog.Property("Output Directory", outputDir)
+		renderLog.Property("Video Path", videoPath)
+	}
 
+	// Get audio path using convention-based lookup
+	audioPath := ""
+	vocalPath := utils.GetSongVocalPath(int(song.ID))
+	musicPath := utils.GetSongMusicPath(int(song.ID))
+
+	if renderLog != nil {
+		renderLog.Debug("Vocal Path: %s", vocalPath)
+		renderLog.Debug("Music Path: %s", musicPath)
+	}
+
+	if vocalPath != "" && musicPath != "" {
 		// Mix vocals and instrumental together
 		mixedPath := filepath.Join(utils.GetTempPath(), fmt.Sprintf("mixed_%d.wav", song.ID))
-		if err := p.mixAudioTracks(song.VocalsStemPath, song.MusicStemPath, mixedPath); err != nil {
-			log.Printf("Warning: failed to mix audio tracks: %v, using vocals only", err)
-			audioPath = song.VocalsStemPath
+		if renderLog != nil {
+			renderLog.Info("Mixing vocal and music tracks")
+			renderLog.Property("Mixed Output", mixedPath)
+		}
+		if err := p.mixAudioTracks(vocalPath, musicPath, mixedPath); err != nil {
+			log.Printf("Warning: failed to mix audio tracks: %v, using best available audio", err)
+			if renderLog != nil {
+				renderLog.Error("Failed to mix audio tracks: %v", err)
+			}
+			audioPath = utils.GetSongAudioPath(int(song.ID))
 		} else {
 			audioPath = mixedPath
+			if renderLog != nil {
+				renderLog.Success("Audio tracks mixed successfully")
+			}
 			defer os.Remove(mixedPath)
 		}
-	} else if song.MixedAudioPath != "" && song.MixedAudioPath != song.VocalsStemPath {
-		// Use pre-mixed audio if it's not the same as vocals
-		audioPath = song.MixedAudioPath
-	} else if song.VocalsStemPath != "" {
-		audioPath = song.VocalsStemPath
+	} else {
+		// Use best available audio (prefers music > vocal > mixed)
+		audioPath = utils.GetSongAudioPath(int(song.ID))
 	}
 
 	if audioPath == "" {
-		return fmt.Errorf("no audio file available")
+		err := fmt.Errorf("no audio file available for video rendering - please upload audio files first")
+		if renderLog != nil {
+			renderLog.Error("%v", err)
+		}
+		return err
 	}
 
 	// Final validation: ensure the audio file actually exists
 	if _, err := os.Stat(audioPath); os.IsNotExist(err) {
-		return fmt.Errorf("audio file not found: %s - please update the file path in the song settings", audioPath)
+		errMsg := fmt.Errorf("audio file not found: %s - please update the file path in the song settings", audioPath)
+		if renderLog != nil {
+			renderLog.Error("%v", errMsg)
+		}
+		return errMsg
+	}
+
+	if renderLog != nil {
+		renderLog.Property("Final Audio Path", audioPath)
+		renderLog.Success("Audio file validated successfully")
 	}
 
 	p.updateProgress(item, "Rendering video", 60, "Loading lyrics and images")
@@ -580,12 +768,36 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 
 	// Generate karaoke subtitles if vocals path is available
 	assSubtitlePath := ""
-	if song.VocalsStemPath != "" {
+	vocalPath = utils.GetSongVocalPath(int(song.ID))
+	log.Printf("DEBUG [Vocal Path Check]: vocalPath='%s' for song_id=%d", vocalPath, song.ID)
+
+	if renderLog != nil {
+		renderLog.Info("Checking for karaoke subtitle generation...")
+		renderLog.Property("Vocal Path", vocalPath)
+		renderLog.Property("Lyrics Karaoke Length", len(song.LyricsKaraoke))
+		if len(song.LyricsKaraoke) > 0 {
+			firstLine := song.LyricsKaraoke
+			if len(firstLine) > 100 {
+				firstLine = firstLine[:100] + "..."
+			}
+			renderLog.Debug("Lyrics Karaoke Preview: %s", firstLine)
+		}
+	}
+
+	if vocalPath != "" {
+		log.Printf("DEBUG [Karaoke Check]: LyricsKaraoke length=%d", len(song.LyricsKaraoke))
+		if len(song.LyricsKaraoke) > 0 {
+			log.Printf("DEBUG [Karaoke Check]: First 100 chars: %s", song.LyricsKaraoke[:min(100, len(song.LyricsKaraoke))])
+		}
 		log.Println("Generating word-level karaoke timestamps...")
 		p.updateProgress(item, "Rendering video", 72, "Generating karaoke timestamps")
 
-		// Create karaoke generator
-		karaokeGen := lyrics.NewKaraokeGenerator(utils.GetDataPath())
+		if renderLog != nil {
+			renderLog.Info("Generating karaoke timestamps with Whisper...")
+		}
+
+		// Create karaoke generator with python scripts path from config
+		karaokeGen := lyrics.NewKaraokeGenerator(p.config.PythonScripts)
 
 		// Prepare karaoke customization options from song settings
 		karaokeOptions := &lyrics.KaraokeOptions{
@@ -623,19 +835,65 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 			karaokeOptions.Alignment = defaults.Alignment
 		}
 
+		if renderLog != nil {
+			renderLog.Info("Karaoke configuration:")
+			renderLog.Property("  Font Family", karaokeOptions.FontFamily)
+			renderLog.Property("  Font Size", karaokeOptions.FontSize)
+			renderLog.Property("  Primary Color", karaokeOptions.PrimaryColor)
+			renderLog.Property("  Highlight Color", karaokeOptions.HighlightColor)
+			renderLog.Property("  Alignment", karaokeOptions.Alignment)
+		}
+
 		// Generate ASS subtitles from vocals, using lyrics_karaoke for display
 		tempDir := utils.GetTempPath()
-		assPath, err := karaokeGen.GenerateKaraokeSubtitles(song.VocalsStemPath, int(song.ID), tempDir, song.LyricsKaraoke, karaokeOptions)
+
+		if renderLog != nil {
+			renderLog.Info("Calling karaoke generator...")
+			renderLog.Property("Temp Directory", tempDir)
+			renderLog.Property("Using Lyrics Karaoke", len(song.LyricsKaraoke) > 0)
+			renderLog.Info("Attempting WhisperX (GPU) first, will fallback to Faster-Whisper (CPU) if unavailable")
+		}
+
+		assPath, whisperEngine, err := karaokeGen.GenerateKaraokeSubtitles(vocalPath, int(song.ID), tempDir, song.LyricsKaraoke, karaokeOptions)
 		if err != nil {
 			log.Printf("Warning: failed to generate karaoke subtitles: %v, using fallback lyrics", err)
+			if renderLog != nil {
+				renderLog.Error("Karaoke generation failed: %v", err)
+				renderLog.Info("This likely means Python modules are missing (faster_whisper or torch)")
+			}
 		} else {
 			assSubtitlePath = assPath
-			log.Printf("Generated karaoke subtitles: %s", assSubtitlePath)
+			song.WhisperEngine = whisperEngine
+			log.Printf("Generated karaoke subtitles using %s: %s", whisperEngine, assSubtitlePath)
+
+			if renderLog != nil {
+				renderLog.Success("Karaoke subtitles generated successfully")
+				renderLog.Property("Whisper Engine Used", whisperEngine)
+				renderLog.Property("ASS File Path", assSubtitlePath)
+			}
+
+			// Save whisper engine info to database
+			if err := p.songRepo.Update(song); err != nil {
+				log.Printf("Warning: failed to save whisper engine to database: %v", err)
+				if renderLog != nil {
+					renderLog.Error("Failed to save whisper engine to database: %v", err)
+				}
+			}
+		}
+	} else {
+		if renderLog != nil {
+			renderLog.Info("No vocal path available - skipping karaoke generation")
 		}
 	}
 
-	// Create video renderer
-	renderer := video.NewVideoRenderer(outputDir)
+	// Create video renderer with branding path
+	brandingPath := filepath.Join(p.config.StoragePath, "branding")
+	renderer := video.NewVideoRenderer(outputDir, brandingPath)
+
+	if renderLog != nil {
+		renderLog.Info("Preparing video render options...")
+		renderLog.Property("Branding Path", brandingPath)
+	}
 
 	// Prepare render options
 	opts := &video.VideoRenderOptions{
@@ -658,12 +916,52 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 		OutputPath:        videoPath,
 	}
 
+	if renderLog != nil {
+		renderLog.Info("Video Render Configuration:")
+		renderLog.Property("  Duration", fmt.Sprintf("%.2fs", opts.Duration))
+		renderLog.Property("  Number of Images", len(opts.ImagePaths))
+		for i, img := range opts.ImagePaths {
+			renderLog.Debug("    Image %d: %s (%.2fs-%.2fs)", i+1, img.ImagePath, img.StartTime, img.EndTime)
+		}
+		renderLog.Property("  Number of Lyric Lines", len(opts.LyricsData))
+		renderLog.Property("  Vocal Onset Offset", fmt.Sprintf("%.2fs", opts.VocalOnset))
+		renderLog.Property("  Crossfade Duration", fmt.Sprintf("%.2fs", opts.CrossfadeDuration))
+		renderLog.Property("  ASS Subtitles", assSubtitlePath != "")
+		if assSubtitlePath != "" {
+			renderLog.Property("  ASS File", assSubtitlePath)
+		}
+		renderLog.Property("  Key", opts.Key)
+		renderLog.Property("  Tempo", opts.Tempo)
+		renderLog.Property("  BPM", opts.BPM)
+
+		// Detailed visualization settings logging
+		renderLog.Info("Visualization Settings:")
+		renderLog.Property("  Spectrum Style (DB)", song.SpectrumStyle)
+		renderLog.Property("  Spectrum Style (Processed)", opts.SpectrumStyle)
+		renderLog.Property("  Spectrum Color (DB)", song.SpectrumColor)
+		renderLog.Property("  Spectrum Color (Processed)", opts.SpectrumColor)
+		renderLog.Property("  Spectrum Opacity (DB)", song.SpectrumOpacity)
+		renderLog.Property("  Spectrum Opacity (Processed)", opts.SpectrumOpacity)
+	}
+
 	p.updateProgress(item, "Rendering video", 75, "Rendering video (this may take a few minutes)")
+
+	if renderLog != nil {
+		renderLog.Info("Starting FFmpeg video render...")
+	}
 
 	// Render the video
 	finalPath, err := renderer.RenderVideo(opts)
 	if err != nil {
+		if renderLog != nil {
+			renderLog.Error("Video rendering failed: %v", err)
+		}
 		return fmt.Errorf("video rendering failed: %w", err)
+	}
+
+	if renderLog != nil {
+		renderLog.Success("Video rendered successfully")
+		renderLog.Property("Final Video Path", finalPath)
 	}
 
 	p.updateProgress(item, "Rendering video", 90, "Video rendering complete")
@@ -729,21 +1027,21 @@ func (p *Processor) buildImageSegments(lyricsData *lyrics.LyricsData, imageDir s
 			// Each verse has unique image
 			imageName = fmt.Sprintf("bg-verse-%d.png", section.Number)
 		case "pre-chorus":
-			// Pre-choruses share one image
-			imageName = "bg-pre-chorus-1.png"
+			// Pre-choruses share one image (no number)
+			imageName = "bg-prechorus.png"
 		case "chorus":
-			// Choruses share one image
-			imageName = "bg-chorus-1.png"
+			// Choruses share one image (no number)
+			imageName = "bg-chorus.png"
 		case "final-chorus":
-			// Final chorus has its own image
-			imageName = "bg-final-chorus-1.png"
+			// Final chorus uses the same chorus image
+			imageName = "bg-chorus.png"
 		case "bridge":
-			// Each bridge has unique image
-			imageName = fmt.Sprintf("bg-bridge-%d.png", section.Number)
+			// Bridge is unique, one per song (no number)
+			imageName = "bg-bridge.png"
 		case "intro":
 			imageName = "bg-intro.png"
 		case "outro":
-			imageName = "bg-outro-1.png"
+			imageName = "bg-outro.png"
 		default:
 			imageName = fmt.Sprintf("bg-%s.png", section.Type)
 		}
@@ -876,7 +1174,10 @@ func parseImageFilename(filename string) (string, *int) {
 }
 
 // uploadToYouTube uploads the video to YouTube
-func (p *Processor) uploadToYouTube(item *models.QueueItem, song *models.Song) error {
+func (p *Processor) uploadToYouTube(item *models.QueueItem, song *models.Song, renderLog *logger.RenderLogger) error {
+	if renderLog != nil {
+		renderLog.Phase("YOUTUBE UPLOAD", "Uploading video to YouTube (stub)")
+	}
 	p.updateProgress(item, "Uploading to YouTube", 92, "Preparing upload")
 	time.Sleep(500 * time.Millisecond)
 

@@ -47,45 +47,35 @@ type KaraokeGenerator struct {
 type WhisperResult struct {
 	Segments []WhisperSegment `json:"segments"`
 	Language string           `json:"language,omitempty"`
+	Method   string           `json:"method,omitempty"` // whisperx or faster-whisper
 }
 
 // NewKaraokeGenerator creates a new karaoke generator instance
-func NewKaraokeGenerator(orchestratorRoot string) *KaraokeGenerator {
+// scriptsPath should be the full path to python-scripts directory (from config.PythonScripts)
+func NewKaraokeGenerator(scriptsPath string) *KaraokeGenerator {
 	// Detect venv path - check multiple locations
 	venvPaths := []string{
-		// If orchestratorRoot is the bin/ directory
-		filepath.Join(orchestratorRoot, "../../.venv/bin/python"),
-		// If orchestratorRoot is the project root
-		filepath.Join(orchestratorRoot, "../.venv/bin/python"),
-		// Direct project root
-		filepath.Join(orchestratorRoot, ".venv/bin/python"),
+		// If scriptsPath is in data directory, check nearby venv
+		filepath.Join(filepath.Dir(scriptsPath), ".venv/bin/python"),
+		// System python3 as fallback
+		"python3",
 	}
 
 	venvPath := "python3" // fallback
 	for _, path := range venvPaths {
+		if path == "python3" {
+			venvPath = path
+			break
+		}
 		if _, err := os.Stat(path); err == nil {
 			venvPath = path
 			break
 		}
 	}
 
-	// Scripts directory should also be found relative to bin/
-	scriptsDirs := []string{
-		filepath.Join(orchestratorRoot, "python-scripts"),
-		filepath.Join(orchestratorRoot, "../python-scripts"),
-	}
-
-	scriptsDir := ""
-	for _, dir := range scriptsDirs {
-		if _, err := os.Stat(dir); err == nil {
-			scriptsDir = dir
-			break
-		}
-	}
-
 	return &KaraokeGenerator{
 		PythonPath:   venvPath,
-		ScriptsDir:   scriptsDir,
+		ScriptsDir:   scriptsPath,
 		WhisperModel: "base", // Use "base" for faster processing, "large-v3" for best quality
 		VenvPath:     venvPath,
 	}
@@ -102,7 +92,7 @@ func (kg *KaraokeGenerator) GenerateTimestamps(vocalsPath string, outputJSON str
 
 	cmd := exec.Command(
 		kg.PythonPath,
-		filepath.Join(kg.ScriptsDir, "generate_timestamps_faster.py"),
+		filepath.Join(kg.ScriptsDir, "generate_timestamps.py"),
 		"--vocals", vocalsPath,
 		"--output", outputJSON,
 		"--model", kg.WhisperModel,
@@ -167,12 +157,16 @@ func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS str
 	// If lyrics_karaoke is provided, write to temp file and pass to script
 	if lyricsKaraoke != "" {
 		lyricsFile := filepath.Join(filepath.Dir(outputASS), "lyrics_temp.txt")
+		log.Printf("DEBUG: Writing lyrics_karaoke to temp file: %s (length: %d, first 100 chars: %s)",
+			lyricsFile, len(lyricsKaraoke), lyricsKaraoke[:min(100, len(lyricsKaraoke))])
 		if err := os.WriteFile(lyricsFile, []byte(lyricsKaraoke), 0644); err != nil {
 			log.Printf("Warning: failed to write lyrics file: %v", err)
 		} else {
 			cmdArgs = append(cmdArgs, "--lyrics", lyricsFile)
 			defer os.Remove(lyricsFile) // Clean up temp file
 		}
+	} else {
+		log.Printf("DEBUG: No lyrics_karaoke provided, will use Whisper transcription")
 	}
 
 	cmd := exec.Command(kg.PythonPath, cmdArgs...)
@@ -188,23 +182,30 @@ func (kg *KaraokeGenerator) GenerateASSFile(timestampsJSON string, outputASS str
 
 // GenerateKaraokeSubtitles is the complete pipeline: vocals → timestamps → ASS
 // If lyricsKaraoke is provided, uses actual lyrics for display instead of Whisper transcription
-func (kg *KaraokeGenerator) GenerateKaraokeSubtitles(vocalsPath string, songID int, workingDir string, lyricsKaraoke string, options *KaraokeOptions) (string, error) {
+// Returns the ASS path and the whisper engine used (whisperx or faster-whisper)
+func (kg *KaraokeGenerator) GenerateKaraokeSubtitles(vocalsPath string, songID int, workingDir string, lyricsKaraoke string, options *KaraokeOptions) (string, string, error) {
 	// Define output paths
 	timestampsJSON := filepath.Join(workingDir, fmt.Sprintf("song_%d_timestamps.json", songID))
 	assPath := filepath.Join(workingDir, fmt.Sprintf("song_%d_karaoke.ass", songID))
 
 	// Step 1: Generate timestamps (uses Whisper for timing only)
-	_, err := kg.GenerateTimestamps(vocalsPath, timestampsJSON)
+	result, err := kg.GenerateTimestamps(vocalsPath, timestampsJSON)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate timestamps: %w", err)
+		return "", "", fmt.Errorf("failed to generate timestamps: %w", err)
+	}
+
+	// Extract which engine was used
+	whisperEngine := result.Method
+	if whisperEngine == "" {
+		whisperEngine = "faster-whisper" // default fallback
 	}
 
 	// Step 2: Generate ASS file (with actual lyrics if provided)
 	err = kg.GenerateASSFile(timestampsJSON, assPath, lyricsKaraoke, options)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate ASS file: %w", err)
+		return "", "", fmt.Errorf("failed to generate ASS file: %w", err)
 	}
 
-	log.Printf("Successfully generated karaoke subtitles: %s", assPath)
-	return assPath, nil
+	log.Printf("Successfully generated karaoke subtitles using %s: %s", whisperEngine, assPath)
+	return assPath, whisperEngine, nil
 }

@@ -13,10 +13,12 @@ type Config struct {
 	DBPath      string
 
 	// Storage paths
-	StoragePath string
-	SongsPath   string
-	VideosPath  string
-	TempPath    string
+	StoragePath   string
+	SongsPath     string
+	VideosPath    string
+	TempPath      string
+	LogsPath      string
+	PythonScripts string
 
 	// CQAI settings
 	CQAIURL    string
@@ -57,6 +59,8 @@ func LoadConfig() *Config {
 	cfg.SongsPath = filepath.Join(cfg.StoragePath, "songs")
 	cfg.VideosPath = filepath.Join(cfg.StoragePath, "videos")
 	cfg.TempPath = filepath.Join(cfg.StoragePath, "temp")
+	cfg.LogsPath = filepath.Join(cfg.StoragePath, "logs")
+	cfg.PythonScripts = filepath.Join(cfg.StoragePath, "python-scripts")
 
 	// CQAI configuration
 	cfg.CQAIURL = "http://cqai.nlaakstudios"
