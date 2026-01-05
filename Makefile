@@ -18,6 +18,7 @@ MULE_HOST := andrew@192.168.1.200
 MULE_PATH := /home/andrew/trackstudio/orchestrator
 MULE_DATA_PATH := /home/andrew/track-studio-data
 MULE_SERVICE := track-studio-orchestrator
+SUDO_PASS := yy1660277
 
 # Colors for output
 COLOR_RESET := \033[0m
