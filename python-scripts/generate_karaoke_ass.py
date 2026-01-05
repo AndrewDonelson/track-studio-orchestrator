@@ -141,7 +141,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,{config.font_family},{config.font_size},{hex_to_ass_color(config.primary_color)},{hex_to_ass_color(config.highlight_color)},{hex_to_ass_color(config.primary_border_color)},&H80000000&,-1,0,0,0,100,100,0,0,1,{config.outline_width},{config.shadow_depth},{config.alignment},50,50,{config.margin_bottom},1
+Style: Karaoke,{config.font_family},{config.font_size},{hex_to_ass_color(config.highlight_color)},{hex_to_ass_color(config.primary_color)},{hex_to_ass_color(config.primary_border_color)},&H80000000&,-1,0,0,0,100,100,0,0,1,{config.outline_width},{config.shadow_depth},{config.alignment},50,50,{config.margin_bottom},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

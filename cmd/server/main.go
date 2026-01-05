@@ -43,6 +43,7 @@ func main() {
 	// Create repositories
 	songRepo := database.NewSongRepository(database.DB)
 	queueRepo := database.NewQueueRepository(database.DB)
+	videoRepo := database.NewVideoRepository(database.DB)
 
 	// Create progress broadcaster for live updates
 	broadcaster := services.NewProgressBroadcaster()
@@ -55,6 +56,7 @@ func main() {
 	audioHandler := handlers.NewAudioHandler(songRepo)
 	uploadHandler := handlers.NewUploadHandler(songRepo)
 	dashboardHandler := handlers.NewDashboardHandler(database.DB)
+	videoHandler := handlers.NewVideoHandler(videoRepo)
 
 	// Create and start queue worker
 	queueWorker := worker.NewWorker(queueRepo, songRepo, broadcaster, 5*time.Second)
@@ -155,6 +157,14 @@ func main() {
 			progress.GET("/stream", progressHandler.StreamProgress)
 			progress.GET("/stream/:id", progressHandler.StreamQueueProgress)
 			progress.GET("/stats", progressHandler.GetStats)
+		}
+
+		// Videos endpoints
+		videos := v1.Group("/videos")
+		{
+			videos.GET("", videoHandler.GetAll)
+			videos.GET("/song/:songId", videoHandler.GetBySongID)
+			videos.DELETE("/:id", videoHandler.Delete)
 		}
 
 		// Albums endpoints (placeholder)

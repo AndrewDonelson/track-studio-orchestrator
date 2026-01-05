@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,26 +24,25 @@ const (
 	DEFAULT_STEPS  = 25
 
 	// Master negative prompt - ALWAYS included to prevent text in images
-	MASTER_NEGATIVE_PROMPT = `text, letters, words, typography, watermark, signature, logo, brand names, writing, captions, subtitles, title, credit, copyright notice, numbers, symbols, alphabet, characters, ui elements, overlays, labels, tags, readable signs, store names, street signs, billboards with text, posters with words, ugly, blurry, low quality, distorted, deformed, disfigured, cartoon, anime, CGI, artificial, fake, amateur, pixelated, grainy, noisy, oversaturated, undersaturated, washed out`
+	MASTER_NEGATIVE_PROMPT = `text, letters, words, numbers, digits, symbols, typography, watermark, signature, logo, brand names, writing, captions, subtitles, titles, labels, tags, readable signs, store names, street signs, billboards, posters with text, written language, calligraphy, handwriting, printed text, ui elements, overlays, credit, copyright notice, alphabet characters, ugly, blurry, low quality, distorted, deformed, disfigured, cartoon, anime, CGI, artificial, fake, amateur, pixelated, grainy, noisy, oversaturated, undersaturated, washed out, glitch, artifacts`
 
 	// LLM system prompt for generating cinematic image descriptions
 	IMAGE_PROMPT_SYSTEM = `You are an expert cinematic photographer creating detailed image prompts for AI image generation.
 
 CRITICAL RULES:
-1. NEVER include text, letters, words, or any written content in the image description
+1. NEVER include text, letters, words, or any written content in descriptions
 2. Create photorealistic, cinematic scenes only
 3. Be extremely specific about visual details
-4. Always include: scene, location, lighting, mood, colors, and camera details
-5. Output length: 150-200 words
-6. Professional photography quality
+4. Structure: [scene/subject] at [location], [lighting], [mood], [colors], [camera/lens details], [composition]
+5. Output length: 120-180 words
+6. End with: photorealistic, professional photography, cinematic composition, 8K, ultra detailed, sharp focus
 
-STRUCTURE YOUR RESPONSE:
-[Vivid scene description] at [specific location with details], [subject and action if any], [detailed lighting description with source and quality], [atmospheric mood], [specific color palette with 3-5 colors], shot with [camera lens and settings], [composition style], photorealistic, professional photography, 8K resolution, ultra detailed, sharp focus, cinematic composition, award-winning photography
+AVOID mentioning: signs, labels, text, writing, billboards, readable content
 
-EXAMPLE:
-"Beautiful beach at golden hour at Miami coastline with distant palm trees and gentle waves, woman in flowing white dress standing at water's edge with back to camera, dramatic golden hour sunlight streaming through clouds creating warm rim lighting, romantic and dreamy atmosphere, warm color palette with deep oranges, soft pinks, and purple sky gradients, shot with 85mm lens at f/2.8 creating shallow depth of field from low angle emphasizing dramatic sky, rule of thirds composition, photorealistic, professional photography, 8K resolution, ultra detailed, sharp focus, cinematic composition, award-winning photography"
+EXAMPLE OUTPUT:
+"Intimate couple embracing on weathered wooden dock at golden hour, dramatic sunset rays streaming through scattered clouds creating warm rim lighting on subjects, romantic and serene atmosphere, rich color palette with deep oranges, soft pinks, purple sky gradients and silver water reflections, shot with 85mm lens at f/2.8 creating shallow depth of field, rule of thirds composition emphasizing connection between subjects, photorealistic, professional photography, cinematic composition, 8K, ultra detailed, sharp focus"
 
-DO NOT include any preamble or explanation - output ONLY the image prompt.`
+Output ONLY the image prompt with NO preamble or explanation.`
 )
 
 type ImageGenerator struct {
@@ -179,6 +179,12 @@ Generate a cinematic, photorealistic image prompt that captures the visual essen
 }
 
 func (ig *ImageGenerator) GenerateImage(prompt, outputFilename string) (string, error) {
+	// Calls GenerateImageWithNegative with empty custom negative
+	return ig.GenerateImageWithNegative(prompt, "", outputFilename)
+}
+
+// GenerateImageWithNegative generates an image with custom negative prompt appended to master
+func (ig *ImageGenerator) GenerateImageWithNegative(prompt, customNegative, outputFilename string) (string, error) {
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
@@ -192,17 +198,30 @@ func (ig *ImageGenerator) GenerateImage(prompt, outputFilename string) (string, 
 		return "", fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	// Add quality modifiers and negative prompt handling
-	enhancedPrompt := fmt.Sprintf("%s, photorealistic, professional photography, 8K resolution, ultra detailed, sharp focus, cinematic composition, award-winning photography", prompt)
+	// Use prompt as-is (LLM already added quality modifiers)
+	enhancedPrompt := prompt
+
+	// Combine master negative prompt with custom negative prompt
+	finalNegative := MASTER_NEGATIVE_PROMPT
+	if customNegative != "" {
+		finalNegative = fmt.Sprintf("%s, %s", MASTER_NEGATIVE_PROMPT, customNegative)
+	}
 
 	req := ZImageRequest{
 		Prompt:         enhancedPrompt,
-		NegativePrompt: MASTER_NEGATIVE_PROMPT,
+		NegativePrompt: finalNegative,
 		Model:          ig.ImageModel,
 		Width:          ig.Width,
 		Height:         ig.Height,
 		Steps:          ig.Steps,
 	}
+
+	// Log the exact request being sent to CQAI
+	log.Printf("═══ CQAI Image Generation Request ═══")
+	log.Printf("Prompt: %s", enhancedPrompt)
+	log.Printf("Negative Prompt: %s", finalNegative)
+	log.Printf("Model: %s, Size: %dx%d, Steps: %d", ig.ImageModel, ig.Width, ig.Height, ig.Steps)
+	log.Printf("═════════════════════════════════════")
 
 	reqBody, err := json.Marshal(req)
 	if err != nil {

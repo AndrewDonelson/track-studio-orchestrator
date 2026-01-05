@@ -134,13 +134,42 @@ type GeneratedImage struct {
 	QueueID        *int      `json:"queue_id" db:"queue_id"`
 	ImagePath      string    `json:"image_path" db:"image_path"`
 	Prompt         string    `json:"prompt" db:"prompt"`
-	NegativePrompt string    `json:"negative_prompt" db:"negative_prompt"`
+	NegativePrompt *string   `json:"negative_prompt,omitempty" db:"negative_prompt"`
 	ImageType      string    `json:"image_type" db:"image_type"` // background, scene, thumbnail
 	SequenceNumber *int      `json:"sequence_number" db:"sequence_number"`
 	Width          int       `json:"width" db:"width"`
 	Height         int       `json:"height" db:"height"`
 	Model          string    `json:"model" db:"model"`
 	CreatedAt      time.Time `json:"created_at" db:"created_at"`
+}
+
+// Video represents a rendered video file
+type Video struct {
+	ID              int       `json:"id" db:"id"`
+	SongID          int       `json:"song_id" db:"song_id"`
+	VideoFilePath   string    `json:"video_file_path" db:"video_file_path"`
+	ThumbnailPath   *string   `json:"thumbnail_path" db:"thumbnail_path"`
+	Resolution      string    `json:"resolution" db:"resolution"` // '4k', '1080p', '720p', '480p'
+	DurationSeconds *float64  `json:"duration_seconds" db:"duration_seconds"`
+	FileSizeBytes   int64     `json:"file_size_bytes" db:"file_size_bytes"`
+	FPS             int       `json:"fps" db:"fps"`
+	BackgroundStyle *string   `json:"background_style" db:"background_style"`
+	SpectrumColor   *string   `json:"spectrum_color" db:"spectrum_color"`
+	HasKaraoke      bool      `json:"has_karaoke" db:"has_karaoke"`
+	Status          string    `json:"status" db:"status"` // 'completed', 'archived', 'deleted'
+	RenderedAt      time.Time `json:"rendered_at" db:"rendered_at"`
+	CreatedAt       time.Time `json:"created_at" db:"created_at"`
+
+	// Metadata fields for filtering
+	Genre *string  `json:"genre,omitempty" db:"genre"`
+	BPM   *float64 `json:"bpm,omitempty" db:"bpm"`
+	Key   *string  `json:"key,omitempty" db:"key"`
+	Tempo *string  `json:"tempo,omitempty" db:"tempo"`
+	Flag  *string  `json:"flag,omitempty" db:"flag"` // User-reported issues
+
+	// Joined fields from songs table
+	SongTitle  string `json:"song_title,omitempty" db:"title"`
+	ArtistName string `json:"artist_name,omitempty" db:"artist_name"`
 }
 
 // Queue status constants

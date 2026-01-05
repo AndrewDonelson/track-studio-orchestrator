@@ -268,7 +268,7 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 				QueueID:        &item.ID,
 				ImagePath:      relativePath,
 				Prompt:         extractedPrompt,
-				NegativePrompt: image.MASTER_NEGATIVE_PROMPT,
+				NegativePrompt: nil,
 				ImageType:      imageType,
 				SequenceNumber: sequenceNum,
 				Width:          1920,
@@ -291,10 +291,19 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		}
 	}
 
-	// Step 4: Check which images are missing (have prompts but no files)
+	// Step 4: Check which images are missing (have prompts but no files on disk)
 	var missingImages []models.GeneratedImage
 	for _, img := range existingImages {
+		// Check if image path is empty in database
 		if img.ImagePath == "" || img.ImagePath == "." {
+			missingImages = append(missingImages, img)
+			continue
+		}
+
+		// Check if file actually exists on disk
+		fullPath := filepath.Join(execDir, img.ImagePath)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			log.Printf("Image exists in database but file missing on disk: %s", fullPath)
 			missingImages = append(missingImages, img)
 		}
 	}
@@ -341,10 +350,16 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		return nil
 	}
 
-	// Step 5: Check if all required images already exist (in database with paths)
+	// Step 5: Check if all required images already exist (in database with paths and files on disk)
 	allImagesReady := len(existingImages) > 0
 	for _, img := range existingImages {
 		if img.ImagePath == "" || img.ImagePath == "." {
+			allImagesReady = false
+			break
+		}
+		// Verify file exists on disk
+		fullPath := filepath.Join(execDir, img.ImagePath)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			allImagesReady = false
 			break
 		}
@@ -393,20 +408,20 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 			filename = fmt.Sprintf("bg-verse-%d.png", section.Number)
 		case "pre-chorus":
 			// Pre-choruses share one image (they repeat the same lyrics)
-			filename = "bg-pre-chorus-1.png"
+			filename = "bg-prechorus.png"
 		case "chorus":
 			// Choruses share one image (they repeat the same lyrics)
-			filename = "bg-chorus-1.png"
+			filename = "bg-chorus.png"
 		case "final-chorus":
-			// Final chorus gets its own image
-			filename = "bg-final-chorus-1.png"
+			// Final chorus gets its own image (if different from regular chorus)
+			filename = "bg-chorus.png"
 		case "bridge":
-			// Each bridge gets its own unique image
-			filename = fmt.Sprintf("bg-bridge-%d.png", section.Number)
+			// Bridge is unique, one per song
+			filename = "bg-bridge.png"
 		case "intro":
 			filename = "bg-intro.png"
 		case "outro":
-			filename = "bg-outro-1.png"
+			filename = "bg-outro.png"
 		default:
 			filename = fmt.Sprintf("bg-%s.png", section.Type)
 		}
@@ -450,7 +465,7 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 			QueueID:        &item.ID,
 			ImagePath:      imagePath,
 			Prompt:         prompt,
-			NegativePrompt: image.MASTER_NEGATIVE_PROMPT,
+			NegativePrompt: nil,
 			ImageType:      section.Type,
 			SequenceNumber: &section.Number,
 			Width:          1920,

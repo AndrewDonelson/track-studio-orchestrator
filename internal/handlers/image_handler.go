@@ -176,9 +176,14 @@ func (h *ImageHandler) regenerateImageAsync(img *models.GeneratedImage) {
 		log.Printf("No existing image path, using generated filename: %s", filename)
 	}
 
-	// Generate new image with the updated prompt
+	// Generate new image with the updated prompt and custom negative prompt
 	log.Printf("Regenerating image %s with prompt: %s", filename, img.Prompt)
-	newPath, err := imageGen.GenerateImage(img.Prompt, filename)
+	negPrompt := ""
+	if img.NegativePrompt != nil {
+		negPrompt = *img.NegativePrompt
+		log.Printf("Custom negative prompt: %s", negPrompt)
+	}
+	newPath, err := imageGen.GenerateImageWithNegative(img.Prompt, negPrompt, filename)
 	if err != nil {
 		log.Printf("Error regenerating image: %v", err)
 		return
@@ -232,6 +237,6 @@ func (h *ImageHandler) GeneratePromptFromLyrics(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"prompt":          enhancedPrompt,
-		"negative_prompt": image.MASTER_NEGATIVE_PROMPT,
+		"negative_prompt": "",
 	})
 }
