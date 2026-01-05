@@ -90,8 +90,8 @@ func (h *DashboardHandler) GetDashboard(c *gin.Context) {
 		return
 	}
 
-	// Total completed videos
-	err = h.db.QueryRow("SELECT COUNT(*) FROM queue WHERE status = 'completed' AND video_file_path IS NOT NULL").Scan(&stats.TotalVideos)
+	// Total completed videos from videos table
+	err = h.db.QueryRow("SELECT COUNT(*) FROM videos WHERE status = 'completed'").Scan(&stats.TotalVideos)
 	if err != nil {
 		stats.TotalVideos = 0
 	}
@@ -108,14 +108,14 @@ func (h *DashboardHandler) GetDashboard(c *gin.Context) {
 		stats.ProcessingItems = 0
 	}
 
-	// Completed today
+	// Completed today from queue (completed queue items)
 	err = h.db.QueryRow("SELECT COUNT(*) FROM queue WHERE status = 'completed' AND DATE(completed_at) = DATE('now')").Scan(&stats.CompletedToday)
 	if err != nil {
 		stats.CompletedToday = 0
 	}
 
-	// Errors today
-	err = h.db.QueryRow("SELECT COUNT(*) FROM queue WHERE status = 'error' AND DATE(updated_at) = DATE('now')").Scan(&stats.ErrorsToday)
+	// Errors today from queue
+	err = h.db.QueryRow("SELECT COUNT(*) FROM queue WHERE status = 'failed' AND DATE(completed_at) = DATE('now')").Scan(&stats.ErrorsToday)
 	if err != nil {
 		stats.ErrorsToday = 0
 	}
@@ -149,70 +149,69 @@ func (h *DashboardHandler) GetDashboard(c *gin.Context) {
 		stats.YTDTotalVideos = 0
 	}
 
-	// Error stats
-	err = h.db.QueryRow("SELECT COUNT(*) FROM queue WHERE status = 'error'").Scan(&totalErrors)
+	// Error stats from queue
+	err = h.db.QueryRow("SELECT COUNT(*) FROM queue WHERE status = 'failed'").Scan(&totalErrors)
 	if err == nil && totalErrors.Valid {
 		stats.YTDTotalErrors = int(totalErrors.Int64)
-		if stats.YTDTotalVideos > 0 {
-			stats.YTDSuccessRate = float64(stats.YTDTotalVideos) / float64(stats.YTDTotalVideos+stats.YTDTotalErrors) * 100
+		totalAttempts := stats.YTDTotalVideos + stats.YTDTotalErrors
+		if totalAttempts > 0 {
+			stats.YTDSuccessRate = float64(stats.YTDTotalVideos) / float64(totalAttempts) * 100
 		} else {
-			stats.YTDSuccessRate = 100.0
+			stats.YTDSuccessRate = 0.0
 		}
 	}
 
-	// Recent videos (last 10)
+	// Recent videos from videos table (last 10)
 	rows, err := h.db.Query(`
-		SELECT q.id, q.song_id, s.title, s.artist_name, q.started_at, q.completed_at
-		FROM queue q
-		JOIN songs s ON q.song_id = s.id
-		WHERE q.status = 'completed' AND q.video_file_path IS NOT NULL
-		ORDER BY q.completed_at DESC
+		SELECT v.id, v.song_id, s.title, s.artist_name, v.rendered_at
+		FROM videos v
+		JOIN songs s ON v.song_id = s.id
+		WHERE v.status = 'completed'
+		ORDER BY v.rendered_at DESC
 		LIMIT 10
 	`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var v RecentVideo
-			var startedAt, completedAt sql.NullTime
-			err = rows.Scan(&v.ID, &v.SongID, &v.Title, &v.Artist, &startedAt, &completedAt)
-			if err == nil && startedAt.Valid && completedAt.Valid {
-				processingSeconds := int(completedAt.Time.Sub(startedAt.Time).Seconds())
-				v.ProcessingTime = formatDuration(processingSeconds)
-				v.CompletedAt = completedAt.Time
+			var renderedAt time.Time
+			err = rows.Scan(&v.ID, &v.SongID, &v.Title, &v.Artist, &renderedAt)
+			if err == nil {
+				v.CompletedAt = renderedAt
+				v.ProcessingTime = "N/A" // Videos table doesn't track processing time
 				stats.RecentVideos = append(stats.RecentVideos, v)
 			}
 		}
 	}
 
-	// Recent errors (last 10)
+	// Recent errors (last 10) from queue
 	rows, err = h.db.Query(`
-		SELECT q.id, q.song_id, s.title, q.error_message, q.updated_at
+		SELECT q.id, q.song_id, s.title, q.error_message, q.completed_at
 		FROM queue q
 		JOIN songs s ON q.song_id = s.id
-		WHERE q.status = 'error'
-		ORDER BY q.updated_at DESC
+		WHERE q.status = 'failed'
+		ORDER BY q.completed_at DESC
 		LIMIT 10
 	`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var e RecentError
-			var updatedAt sql.NullTime
-			err = rows.Scan(&e.ID, &e.SongID, &e.Title, &e.ErrorMessage, &updatedAt)
-			if err == nil && updatedAt.Valid {
-				e.FailedAt = updatedAt.Time
+			var completedAt sql.NullTime
+			err = rows.Scan(&e.ID, &e.SongID, &e.Title, &e.ErrorMessage, &completedAt)
+			if err == nil && completedAt.Valid {
+				e.FailedAt = completedAt.Time
 				stats.RecentErrors = append(stats.RecentErrors, e)
 			}
 		}
 	}
 
-	// Genre distribution
+	// Genre distribution from videos
 	rows, err = h.db.Query(`
-		SELECT s.genre, COUNT(*) as count
-		FROM songs s
-		JOIN queue q ON s.id = q.song_id
-		WHERE q.status = 'completed' AND s.genre != ''
-		GROUP BY s.genre
+		SELECT COALESCE(v.genre, 'Unknown') as genre, COUNT(*) as count
+		FROM videos v
+		WHERE v.status = 'completed'
+		GROUP BY v.genre
 		ORDER BY count DESC
 		LIMIT 10
 	`)

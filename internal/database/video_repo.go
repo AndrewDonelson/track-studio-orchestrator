@@ -148,16 +148,14 @@ func (r *VideoRepository) Create(video *models.Video) error {
 
 // CreateOrUpdate inserts a new video or updates existing one for the same song
 func (r *VideoRepository) CreateOrUpdate(video *models.Video) error {
-	// Check if video already exists for this song
-	existingVideos, err := r.GetBySongID(video.SongID)
-	if err != nil {
-		return err
-	}
+	// Check if ANY video already exists for this song (regardless of status)
+	var existingID int
+	query := `SELECT id FROM videos WHERE song_id = ? ORDER BY created_at DESC LIMIT 1`
+	err := r.db.QueryRow(query, video.SongID).Scan(&existingID)
 
-	// If video exists, update it
-	if len(existingVideos) > 0 {
-		existing := existingVideos[0] // Get the first (should only be one per song)
-		query := `
+	if err == nil {
+		// Video exists, update it
+		updateQuery := `
 			UPDATE videos 
 			SET video_file_path = ?, thumbnail_path = ?, resolution = ?, 
 			    duration_seconds = ?, file_size_bytes = ?, fps = ?,
@@ -168,7 +166,7 @@ func (r *VideoRepository) CreateOrUpdate(video *models.Video) error {
 		`
 
 		_, err := r.db.Exec(
-			query,
+			updateQuery,
 			video.VideoFilePath,
 			video.ThumbnailPath,
 			video.Resolution,
@@ -184,16 +182,20 @@ func (r *VideoRepository) CreateOrUpdate(video *models.Video) error {
 			video.BPM,
 			video.Key,
 			video.Tempo,
-			existing.ID,
+			existingID,
 		)
 		if err != nil {
 			return err
 		}
-		video.ID = existing.ID
+		video.ID = existingID
 		return nil
 	}
 
-	// Otherwise, create new record
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	// No existing video, create new record
 	return r.Create(video)
 }
 
