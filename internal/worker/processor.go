@@ -677,6 +677,34 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 
 	log.Printf("Video rendering complete for song: %s - Output: %s (%.2f MB)",
 		song.Title, finalPath, float64(item.VideoFileSize)/(1024*1024))
+
+	// Create or update video record in database
+	videoRepo := database.NewVideoRepository(database.DB)
+	videoRecord := &models.Video{
+		SongID:          song.ID,
+		VideoFilePath:   finalPath,
+		Resolution:      song.TargetResolution,
+		DurationSeconds: &song.DurationSeconds,
+		FileSizeBytes:   item.VideoFileSize,
+		FPS:             30,
+		BackgroundStyle: &song.BackgroundStyle,
+		SpectrumColor:   &song.SpectrumColor,
+		HasKaraoke:      true,
+		Status:          "completed",
+		RenderedAt:      time.Now(),
+		Genre:           &song.Genre,
+		BPM:             &song.BPM,
+		Key:             &song.Key,
+		Tempo:           &song.Tempo,
+	}
+
+	if err := videoRepo.CreateOrUpdate(videoRecord); err != nil {
+		log.Printf("Error creating/updating video record in database: %v", err)
+		// Don't fail the whole process if video record creation fails
+	} else {
+		log.Printf("Video record created/updated in database: ID=%d", videoRecord.ID)
+	}
+
 	return nil
 }
 

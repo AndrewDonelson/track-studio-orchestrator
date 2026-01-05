@@ -146,6 +146,57 @@ func (r *VideoRepository) Create(video *models.Video) error {
 	return nil
 }
 
+// CreateOrUpdate inserts a new video or updates existing one for the same song
+func (r *VideoRepository) CreateOrUpdate(video *models.Video) error {
+	// Check if video already exists for this song
+	existingVideos, err := r.GetBySongID(video.SongID)
+	if err != nil {
+		return err
+	}
+
+	// If video exists, update it
+	if len(existingVideos) > 0 {
+		existing := existingVideos[0] // Get the first (should only be one per song)
+		query := `
+			UPDATE videos 
+			SET video_file_path = ?, thumbnail_path = ?, resolution = ?, 
+			    duration_seconds = ?, file_size_bytes = ?, fps = ?,
+			    background_style = ?, spectrum_color = ?, has_karaoke = ?,
+			    status = ?, rendered_at = ?,
+			    genre = ?, bpm = ?, key = ?, tempo = ?
+			WHERE id = ?
+		`
+
+		_, err := r.db.Exec(
+			query,
+			video.VideoFilePath,
+			video.ThumbnailPath,
+			video.Resolution,
+			video.DurationSeconds,
+			video.FileSizeBytes,
+			video.FPS,
+			video.BackgroundStyle,
+			video.SpectrumColor,
+			video.HasKaraoke,
+			video.Status,
+			video.RenderedAt,
+			video.Genre,
+			video.BPM,
+			video.Key,
+			video.Tempo,
+			existing.ID,
+		)
+		if err != nil {
+			return err
+		}
+		video.ID = existing.ID
+		return nil
+	}
+
+	// Otherwise, create new record
+	return r.Create(video)
+}
+
 // Delete marks a video as deleted (soft delete)
 func (r *VideoRepository) Delete(id int) error {
 	_, err := r.db.Exec("UPDATE videos SET status = 'deleted' WHERE id = ?", id)
