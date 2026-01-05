@@ -13,6 +13,7 @@ import (
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/handlers"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/utils"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/worker"
 	"github.com/gin-gonic/gin"
 )
@@ -25,6 +26,13 @@ func main() {
 	cfg := config.LoadConfig()
 	log.Printf("Environment: %s", cfg.Environment)
 	log.Printf("Server port: %d", cfg.ServerPort)
+	log.Printf("Data path: %s", cfg.DBPath)
+
+	// Ensure data directories exist
+	if err := utils.EnsureDataDirectories(); err != nil {
+		log.Fatalf("Failed to create data directories: %v", err)
+	}
+	log.Printf("Data directories verified")
 
 	// Initialize database
 	if err := database.InitDB(cfg.DBPath); err != nil {
@@ -44,6 +52,7 @@ func main() {
 	songRepo := database.NewSongRepository(database.DB)
 	queueRepo := database.NewQueueRepository(database.DB)
 	videoRepo := database.NewVideoRepository(database.DB)
+	settingsRepo := database.NewSettingsRepository(database.DB)
 
 	// Create progress broadcaster for live updates
 	broadcaster := services.NewProgressBroadcaster()
@@ -57,6 +66,7 @@ func main() {
 	uploadHandler := handlers.NewUploadHandler(songRepo)
 	dashboardHandler := handlers.NewDashboardHandler(database.DB)
 	videoHandler := handlers.NewVideoHandler(videoRepo)
+	settingsHandler := handlers.NewSettingsHandler(settingsRepo)
 
 	// Create and start queue worker
 	queueWorker := worker.NewWorker(queueRepo, songRepo, broadcaster, 5*time.Second)
@@ -94,15 +104,13 @@ func main() {
 		})
 	})
 
-	// Serve static video files
-	homeDir, _ := os.UserHomeDir()
-	basePath := filepath.Join(homeDir, "Development", "Fullstack-Projects", "TrackStudio", "track-studio-orchestrator")
-	videosPath := filepath.Join(basePath, "bin", "storage", "videos")
+	// Serve static files from new data directory
+	videosPath := utils.GetVideosPath()
 	router.Static("/videos", videosPath)
 	log.Printf("Serving videos from: %s", videosPath)
 
 	// Serve static image files
-	imagesPath := filepath.Join(basePath, "bin", "storage", "images")
+	imagesPath := utils.GetImagesPath()
 	router.Static("/images", imagesPath)
 	log.Printf("Serving images from: %s", imagesPath)
 
@@ -120,6 +128,9 @@ func main() {
 			songs.POST("", songHandler.Create)
 			songs.PUT("/:id", songHandler.Update)
 			songs.DELETE("/:id", songHandler.Delete)
+
+			// Validation endpoint
+			songs.GET("/:id/validate-paths", songHandler.ValidateAudioPaths)
 
 			// Image endpoints for songs
 			songs.GET("/:id/images", imageHandler.GetImagesBySong)
@@ -166,6 +177,10 @@ func main() {
 			videos.GET("/song/:songId", videoHandler.GetBySongID)
 			videos.DELETE("/:id", videoHandler.Delete)
 		}
+
+		// Settings endpoints
+		v1.GET("/settings", settingsHandler.Get)
+		v1.POST("/settings", settingsHandler.Update)
 
 		// Albums endpoints (placeholder)
 		albums := v1.Group("/albums")

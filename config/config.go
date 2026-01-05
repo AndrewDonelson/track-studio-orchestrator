@@ -45,12 +45,12 @@ func LoadConfig() *Config {
 		cfg.DBPath = "/home/andrew/trackstudio/orchestrator/data/trackstudio.db"
 		cfg.StoragePath = "/home/andrew/trackstudio/orchestrator/storage"
 	} else {
-		// Development paths
+		// Development paths - now using ~/track-studio-data
 		cfg.ServerPort = 8080
 		homeDir, _ := os.UserHomeDir()
-		basePath := filepath.Join(homeDir, "Development", "Fullstack-Projects", "TrackStudio", "track-studio-orchestrator")
-		cfg.DBPath = filepath.Join(basePath, "data", "trackstudio.db")
-		cfg.StoragePath = filepath.Join(basePath, "storage")
+		dataPath := filepath.Join(homeDir, "track-studio-data")
+		cfg.DBPath = filepath.Join(dataPath, "trackstudio.db")
+		cfg.StoragePath = dataPath
 	}
 
 	// Derived storage paths

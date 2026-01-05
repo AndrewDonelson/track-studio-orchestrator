@@ -180,3 +180,14 @@ const (
 	StatusFailed     = "failed"
 	StatusRetrying   = "retrying"
 )
+
+// Settings represents application-wide settings
+type Settings struct {
+	ID                   int       `json:"id" db:"id"`
+	MasterPrompt         string    `json:"master_prompt" db:"master_prompt"`
+	MasterNegativePrompt string    `json:"master_negative_prompt" db:"master_negative_prompt"`
+	BrandLogoPath        string    `json:"brand_logo_path" db:"brand_logo_path"`
+	DataStoragePath      string    `json:"data_storage_path" db:"data_storage_path"`
+	CreatedAt            time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at" db:"updated_at"`
+}

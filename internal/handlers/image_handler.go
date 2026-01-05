@@ -11,6 +11,7 @@ import (
 
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/utils"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/image"
 
 	"github.com/gin-gonic/gin"
@@ -145,24 +146,16 @@ func (h *ImageHandler) RegenerateImage(c *gin.Context) {
 func (h *ImageHandler) regenerateImageAsync(img *models.GeneratedImage) {
 	log.Printf("Starting image regeneration for ID %d", img.ID)
 
-	// Get executable directory for absolute paths
-	execPath, err := os.Executable()
-	if err != nil {
-		log.Printf("Error getting executable path: %v", err)
-		return
-	}
-	execDir := filepath.Dir(execPath)
-
 	// Setup image generator with the correct output directory
-	outputDir := filepath.Join(execDir, "storage", "images", fmt.Sprintf("song_%d", img.SongID))
+	outputDir := filepath.Join(utils.GetImagesPath(), fmt.Sprintf("song_%d", img.SongID))
 	imageGen := image.NewImageGenerator(outputDir)
 
 	// Generate filename based on image type if path is empty
 	var filename string
 	if img.ImagePath != "" && img.ImagePath != "." {
 		filename = filepath.Base(img.ImagePath)
-		// Delete old image file
-		fullPath := filepath.Join(execDir, img.ImagePath)
+		// Delete old image file if it exists
+		fullPath := filepath.Join(utils.GetDataPath(), img.ImagePath)
 		if err := os.Remove(fullPath); err != nil {
 			log.Printf("Warning: failed to delete old image file %s: %v", fullPath, err)
 		}
@@ -191,8 +184,9 @@ func (h *ImageHandler) regenerateImageAsync(img *models.GeneratedImage) {
 
 	log.Printf("Image regenerated successfully: %s", newPath)
 
-	// Update database with the new image path (relative to storage/)
-	relativePath := strings.TrimPrefix(newPath, execDir+"/")
+	// Update database with the relative path from data directory
+	dataPath := utils.GetDataPath()
+	relativePath := strings.TrimPrefix(newPath, dataPath+"/")
 	if err := database.UpdateImagePath(img.ID, relativePath); err != nil {
 		log.Printf("Error updating image path in database: %v", err)
 		return

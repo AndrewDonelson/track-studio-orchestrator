@@ -13,6 +13,7 @@ import (
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/database"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/models"
 	"github.com/AndrewDonelson/track-studio-orchestrator/internal/services"
+	"github.com/AndrewDonelson/track-studio-orchestrator/internal/utils"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/audio"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/image"
 	"github.com/AndrewDonelson/track-studio-orchestrator/pkg/lyrics"
@@ -205,13 +206,8 @@ func (p *Processor) processLyrics(item *models.QueueItem, song *models.Song) err
 func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) error {
 	p.updateProgress(item, "Generating images", 30, "Scanning for existing images")
 
-	// Get executable directory for absolute paths
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-	execDir := filepath.Dir(execPath)
-	outputDir := filepath.Join(execDir, "storage", "images", fmt.Sprintf("song_%d", song.ID))
+	// Get images directory
+	outputDir := filepath.Join(utils.GetImagesPath(), fmt.Sprintf("song_%d", song.ID))
 	imageGen := image.NewImageGenerator(outputDir)
 
 	// Step 1: Check for existing image FILES on disk
@@ -262,7 +258,8 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 			}
 
 			// Create database entry with extracted prompt
-			relativePath := strings.TrimPrefix(filePath, execDir+"/")
+			dataPath := utils.GetDataPath()
+			relativePath := strings.TrimPrefix(filePath, dataPath+"/")
 			genImage := &models.GeneratedImage{
 				SongID:         song.ID,
 				QueueID:        &item.ID,
@@ -301,7 +298,7 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 		}
 
 		// Check if file actually exists on disk
-		fullPath := filepath.Join(execDir, img.ImagePath)
+		fullPath := filepath.Join(utils.GetDataPath(), img.ImagePath)
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			log.Printf("Image exists in database but file missing on disk: %s", fullPath)
 			missingImages = append(missingImages, img)
@@ -337,7 +334,8 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 			}
 
 			// Update database with the new image path
-			relativePath := strings.TrimPrefix(imagePath, execDir+"/")
+			dataPath := utils.GetDataPath()
+			relativePath := strings.TrimPrefix(imagePath, dataPath+"/")
 			if err := database.UpdateImagePath(img.ID, relativePath); err != nil {
 				log.Printf("Warning: failed to update image path for %d: %v", img.ID, err)
 				continue
@@ -358,7 +356,7 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 			break
 		}
 		// Verify file exists on disk
-		fullPath := filepath.Join(execDir, img.ImagePath)
+		fullPath := filepath.Join(utils.GetDataPath(), img.ImagePath)
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			allImagesReady = false
 			break
@@ -491,23 +489,24 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song) er
 func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error {
 	p.updateProgress(item, "Rendering video", 55, "Preparing video assets")
 
-	// Get executable directory for absolute paths
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-	execDir := filepath.Dir(execPath)
-
 	// Setup paths
-	outputDir := filepath.Join(execDir, "storage", "videos")
+	outputDir := utils.GetVideosPath()
 	videoPath := filepath.Join(outputDir, fmt.Sprintf("%s.mp4",
 		strings.ReplaceAll(song.Title, " ", "_")))
 
 	// Get audio path - need to mix vocals and instrumental
 	audioPath := ""
 	if song.VocalsStemPath != "" && song.MusicStemPath != "" {
+		// Validate both stem files exist before attempting to mix
+		if _, err := os.Stat(song.VocalsStemPath); os.IsNotExist(err) {
+			return fmt.Errorf("vocals stem file not found: %s - please update the file path in the song settings", song.VocalsStemPath)
+		}
+		if _, err := os.Stat(song.MusicStemPath); os.IsNotExist(err) {
+			return fmt.Errorf("music stem file not found: %s - please update the file path in the song settings", song.MusicStemPath)
+		}
+
 		// Mix vocals and instrumental together
-		mixedPath := filepath.Join(execDir, "storage", "temp", fmt.Sprintf("mixed_%d.wav", song.ID))
+		mixedPath := filepath.Join(utils.GetTempPath(), fmt.Sprintf("mixed_%d.wav", song.ID))
 		if err := p.mixAudioTracks(song.VocalsStemPath, song.MusicStemPath, mixedPath); err != nil {
 			log.Printf("Warning: failed to mix audio tracks: %v, using vocals only", err)
 			audioPath = song.VocalsStemPath
@@ -524,6 +523,11 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 
 	if audioPath == "" {
 		return fmt.Errorf("no audio file available")
+	}
+
+	// Final validation: ensure the audio file actually exists
+	if _, err := os.Stat(audioPath); os.IsNotExist(err) {
+		return fmt.Errorf("audio file not found: %s - please update the file path in the song settings", audioPath)
 	}
 
 	p.updateProgress(item, "Rendering video", 60, "Loading lyrics and images")
@@ -551,7 +555,7 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 	}
 
 	// Build image segments from sections
-	imageDir := filepath.Join(execDir, "storage", "images", fmt.Sprintf("song_%d", song.ID))
+	imageDir := filepath.Join(utils.GetImagesPath(), fmt.Sprintf("song_%d", song.ID))
 	imageSegments, err := p.buildImageSegments(&lyricsData, imageDir, song.DurationSeconds)
 	if err != nil {
 		return fmt.Errorf("failed to build image segments: %w", err)
@@ -581,7 +585,7 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 		p.updateProgress(item, "Rendering video", 72, "Generating karaoke timestamps")
 
 		// Create karaoke generator
-		karaokeGen := lyrics.NewKaraokeGenerator(execDir)
+		karaokeGen := lyrics.NewKaraokeGenerator(utils.GetDataPath())
 
 		// Prepare karaoke customization options from song settings
 		karaokeOptions := &lyrics.KaraokeOptions{
@@ -620,7 +624,7 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 		}
 
 		// Generate ASS subtitles from vocals, using lyrics_karaoke for display
-		tempDir := filepath.Join(execDir, "storage", "temp")
+		tempDir := utils.GetTempPath()
 		assPath, err := karaokeGen.GenerateKaraokeSubtitles(song.VocalsStemPath, int(song.ID), tempDir, song.LyricsKaraoke, karaokeOptions)
 		if err != nil {
 			log.Printf("Warning: failed to generate karaoke subtitles: %v, using fallback lyrics", err)
