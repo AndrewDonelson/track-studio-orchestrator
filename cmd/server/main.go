@@ -54,6 +54,7 @@ func main() {
 	imageHandler := handlers.NewImageHandler()
 	audioHandler := handlers.NewAudioHandler(songRepo)
 	uploadHandler := handlers.NewUploadHandler(songRepo)
+	dashboardHandler := handlers.NewDashboardHandler(database.DB)
 
 	// Create and start queue worker
 	queueWorker := worker.NewWorker(queueRepo, songRepo, broadcaster, 5*time.Second)
@@ -106,6 +107,9 @@ func main() {
 	// API v1 group
 	v1 := router.Group("/api/v1")
 	{
+		// Dashboard endpoint
+		v1.GET("/dashboard", dashboardHandler.GetDashboard)
+
 		// Songs endpoints
 		songs := v1.Group("/songs")
 		{

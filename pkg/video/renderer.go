@@ -1125,21 +1125,44 @@ func escapeText(text string) string {
 	return text
 }
 
-// addASSSubtitles adds ASS karaoke subtitles to the video
+// addASSSubtitles adds ASS karaoke subtitles to the video with logo overlay
 func (vr *VideoRenderer) addASSSubtitles(inputPath, assPath, outputPath string) (string, error) {
 	log.Printf("Adding ASS subtitles from: %s", assPath)
 
-	// Use FFmpeg subtitles filter to burn in ASS subtitles
-	// This properly handles karaoke effects defined in the ASS file
-	cmd := exec.Command("ffmpeg",
-		"-i", inputPath,
-		"-vf", fmt.Sprintf("subtitles=%s", assPath),
-		"-c:v", "libx264",
-		"-preset", "medium",
-		"-crf", "23",
-		"-y",
-		outputPath,
-	)
+	// Check if artist logo exists for overlay
+	logoPath := filepath.Join("storage", "branding", "artist-logo.png")
+	logoExists := false
+	if _, err := os.Stat(logoPath); err == nil {
+		logoExists = true
+	}
+
+	var cmd *exec.Cmd
+	if logoExists {
+		// Use filter_complex to add ASS subtitles + logo overlay (256x256 with 70% opacity, bottom-right, 20px margins)
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-i", logoPath,
+			"-filter_complex",
+			fmt.Sprintf("[0:v]subtitles=%s[v1];[1:v]scale=256:256,format=rgba,colorchannelmixer=aa=0.7[logo];[v1][logo]overlay=W-w-20:H-h-20[vout]", assPath),
+			"-map", "[vout]",
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			outputPath,
+		)
+	} else {
+		// No logo, just ASS subtitles
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-vf", fmt.Sprintf("subtitles=%s", assPath),
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-y",
+			outputPath,
+		)
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

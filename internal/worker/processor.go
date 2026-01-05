@@ -580,9 +580,28 @@ func (p *Processor) renderVideo(item *models.QueueItem, song *models.Song) error
 			MarginBottom:         song.KaraokeMarginBottom,
 		}
 
-		// Use defaults if not set
+		// Use defaults if critical fields are missing or invalid
+		defaults := lyrics.DefaultKaraokeOptions()
 		if karaokeOptions.FontFamily == "" {
-			karaokeOptions = lyrics.DefaultKaraokeOptions()
+			karaokeOptions.FontFamily = defaults.FontFamily
+		}
+		if karaokeOptions.FontSize <= 0 {
+			karaokeOptions.FontSize = defaults.FontSize
+		}
+		if karaokeOptions.PrimaryColor == "" {
+			karaokeOptions.PrimaryColor = defaults.PrimaryColor
+		}
+		if karaokeOptions.PrimaryBorderColor == "" {
+			karaokeOptions.PrimaryBorderColor = defaults.PrimaryBorderColor
+		}
+		if karaokeOptions.HighlightColor == "" {
+			karaokeOptions.HighlightColor = defaults.HighlightColor
+		}
+		if karaokeOptions.HighlightBorderColor == "" {
+			karaokeOptions.HighlightBorderColor = defaults.HighlightBorderColor
+		}
+		if karaokeOptions.Alignment <= 0 || karaokeOptions.Alignment > 9 {
+			karaokeOptions.Alignment = defaults.Alignment
 		}
 
 		// Generate ASS subtitles from vocals, using lyrics_karaoke for display

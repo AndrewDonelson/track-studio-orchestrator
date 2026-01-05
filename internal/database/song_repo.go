@@ -37,6 +37,14 @@ func (r *SongRepository) GetAll() ([]models.Song, error) {
 		COALESCE(spectrum_color, 'rainbow') as spectrum_color, 
 		COALESCE(spectrum_opacity, 0.25) as spectrum_opacity, 
 		COALESCE(target_resolution, '4k') as target_resolution,
+		COALESCE(karaoke_font_family, 'Arial') as karaoke_font_family,
+		COALESCE(karaoke_font_size, 96) as karaoke_font_size,
+		COALESCE(karaoke_primary_color, '4169E1') as karaoke_primary_color,
+		COALESCE(karaoke_primary_border_color, 'FFFFFF') as karaoke_primary_border_color,
+		COALESCE(karaoke_highlight_color, 'FFD700') as karaoke_highlight_color,
+		COALESCE(karaoke_highlight_border_color, 'FFFFFF') as karaoke_highlight_border_color,
+		COALESCE(karaoke_alignment, 5) as karaoke_alignment,
+		COALESCE(karaoke_margin_bottom, 0) as karaoke_margin_bottom,
 		created_at, updated_at
 		FROM songs ORDER BY created_at DESC`
 
@@ -56,6 +64,8 @@ func (r *SongRepository) GetAll() ([]models.Song, error) {
 			&s.BPM, &s.Key, &s.Tempo, &s.DurationSeconds, &s.VocalTiming,
 			&s.BrandLogoPath, &s.CopyrightText,
 			&s.BackgroundStyle, &s.SpectrumColor, &s.SpectrumOpacity, &s.TargetResolution,
+			&s.KaraokeFontFamily, &s.KaraokeFontSize, &s.KaraokePrimaryColor, &s.KaraokePrimaryBorderColor,
+			&s.KaraokeHighlightColor, &s.KaraokeHighlightBorderColor, &s.KaraokeAlignment, &s.KaraokeMarginBottom,
 			&s.CreatedAt, &s.UpdatedAt,
 		)
 		if err != nil {
@@ -88,6 +98,14 @@ func (r *SongRepository) GetByID(id int) (*models.Song, error) {
 		COALESCE(spectrum_color, 'rainbow') as spectrum_color, 
 		COALESCE(spectrum_opacity, 0.25) as spectrum_opacity, 
 		COALESCE(target_resolution, '4k') as target_resolution,
+		COALESCE(karaoke_font_family, 'Arial') as karaoke_font_family,
+		COALESCE(karaoke_font_size, 96) as karaoke_font_size,
+		COALESCE(karaoke_primary_color, '4169E1') as karaoke_primary_color,
+		COALESCE(karaoke_primary_border_color, 'FFFFFF') as karaoke_primary_border_color,
+		COALESCE(karaoke_highlight_color, 'FFD700') as karaoke_highlight_color,
+		COALESCE(karaoke_highlight_border_color, 'FFFFFF') as karaoke_highlight_border_color,
+		COALESCE(karaoke_alignment, 5) as karaoke_alignment,
+		COALESCE(karaoke_margin_bottom, 0) as karaoke_margin_bottom,
 		created_at, updated_at
 		FROM songs WHERE id = ?`
 
@@ -99,6 +117,8 @@ func (r *SongRepository) GetByID(id int) (*models.Song, error) {
 		&s.BPM, &s.Key, &s.Tempo, &s.DurationSeconds, &s.VocalTiming,
 		&s.BrandLogoPath, &s.CopyrightText,
 		&s.BackgroundStyle, &s.SpectrumColor, &s.SpectrumOpacity, &s.TargetResolution,
+		&s.KaraokeFontFamily, &s.KaraokeFontSize, &s.KaraokePrimaryColor, &s.KaraokePrimaryBorderColor,
+		&s.KaraokeHighlightColor, &s.KaraokeHighlightBorderColor, &s.KaraokeAlignment, &s.KaraokeMarginBottom,
 		&s.CreatedAt, &s.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -118,8 +138,10 @@ func (r *SongRepository) Create(song *models.Song) error {
 		lyrics, lyrics_karaoke, lyrics_display, lyrics_sections,
 		bpm, key, tempo, duration_seconds, vocal_timing,
 		brand_logo_path, copyright_text,
-		background_style, spectrum_color, spectrum_opacity, target_resolution)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		background_style, spectrum_color, spectrum_opacity, target_resolution,
+		karaoke_font_family, karaoke_font_size, karaoke_primary_color, karaoke_primary_border_color,
+		karaoke_highlight_color, karaoke_highlight_border_color, karaoke_alignment, karaoke_margin_bottom)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := r.db.Exec(query,
 		song.AlbumID, song.Title, song.ArtistName, song.Genre,
@@ -128,6 +150,8 @@ func (r *SongRepository) Create(song *models.Song) error {
 		song.BPM, song.Key, song.Tempo, song.DurationSeconds, song.VocalTiming,
 		song.BrandLogoPath, song.CopyrightText,
 		song.BackgroundStyle, song.SpectrumColor, song.SpectrumOpacity, song.TargetResolution,
+		song.KaraokeFontFamily, song.KaraokeFontSize, song.KaraokePrimaryColor, song.KaraokePrimaryBorderColor,
+		song.KaraokeHighlightColor, song.KaraokeHighlightBorderColor, song.KaraokeAlignment, song.KaraokeMarginBottom,
 	)
 	if err != nil {
 		return err
@@ -150,6 +174,8 @@ func (r *SongRepository) Update(song *models.Song) error {
 		bpm=?, key=?, tempo=?, duration_seconds=?, vocal_timing=?,
 		brand_logo_path=?, copyright_text=?,
 		background_style=?, spectrum_color=?, spectrum_opacity=?, target_resolution=?,
+		karaoke_font_family=?, karaoke_font_size=?, karaoke_primary_color=?, karaoke_primary_border_color=?,
+		karaoke_highlight_color=?, karaoke_highlight_border_color=?, karaoke_alignment=?, karaoke_margin_bottom=?,
 		updated_at=CURRENT_TIMESTAMP
 		WHERE id=?`
 
@@ -160,6 +186,8 @@ func (r *SongRepository) Update(song *models.Song) error {
 		song.BPM, song.Key, song.Tempo, song.DurationSeconds, song.VocalTiming,
 		song.BrandLogoPath, song.CopyrightText,
 		song.BackgroundStyle, song.SpectrumColor, song.SpectrumOpacity, song.TargetResolution,
+		song.KaraokeFontFamily, song.KaraokeFontSize, song.KaraokePrimaryColor, song.KaraokePrimaryBorderColor,
+		song.KaraokeHighlightColor, song.KaraokeHighlightBorderColor, song.KaraokeAlignment, song.KaraokeMarginBottom,
 		song.ID,
 	)
 	return err

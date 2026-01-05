@@ -26,6 +26,10 @@ def hex_to_ass_color(hex_color):
     # Remove # if present
     hex_color = hex_color.lstrip('#')
     
+    # Validate hex color - must be exactly 6 characters
+    if len(hex_color) != 6:
+        hex_color = "4169E1"  # Default to Royal Blue if invalid
+    
     # ASS uses BGR format with alpha channel
     r, g, b = hex_color[0:2], hex_color[2:4], hex_color[4:6]
     return f"&H00{b}{g}{r}&"
@@ -61,6 +65,53 @@ def split_text_intelligently(words_data, max_chars):
     
     return lines
 
+def align_lyrics_with_timings(whisper_segments, actual_lyrics_lines):
+    """
+    Align actual lyrics with Whisper timings
+    Returns segments with correct words but using Whisper timing data
+    Preserves original Whisper segment structure for proper timing
+    """
+    if not actual_lyrics_lines:
+        return whisper_segments
+    
+    # Extract all words from actual lyrics
+    actual_words = []
+    for line in actual_lyrics_lines:
+        line_words = line.split()
+        actual_words.extend(line_words)
+    
+    # Align word-by-word, preserving Whisper segment boundaries
+    actual_idx = 0
+    aligned_segments = []
+    
+    for segment in whisper_segments:
+        if 'words' not in segment or not segment['words']:
+            continue
+        
+        aligned_words = []
+        for word_data in segment['words']:
+            if actual_idx < len(actual_words):
+                # Use actual lyric word with original Whisper timing
+                aligned_words.append({
+                    'word': actual_words[actual_idx],
+                    'start': word_data['start'],
+                    'end': word_data['end']
+                })
+                actual_idx += 1
+            else:
+                # Fallback to Whisper if we run out of actual lyrics
+                aligned_words.append(word_data)
+        
+        if aligned_words:
+            # Preserve original segment timing boundaries
+            aligned_segments.append({
+                'start': segment['start'],
+                'end': segment['end'],
+                'words': aligned_words
+            })
+    
+    return aligned_segments
+
 def create_karaoke_ass(timestamps_json, output_ass, lyrics_text=None, config=KaraokeConfig()):
     """
     Generate ASS subtitle file with karaoke effects
@@ -70,10 +121,14 @@ def create_karaoke_ass(timestamps_json, output_ass, lyrics_text=None, config=Kar
     with open(timestamps_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
-    # If actual lyrics provided, split into lines matching Whisper segments
+    # If actual lyrics provided, align them with Whisper timings
     actual_lyrics_lines = None
+    segments = data['segments']
+    
     if lyrics_text:
         actual_lyrics_lines = [line.strip() for line in lyrics_text.split('\n') if line.strip()]
+        # Align actual lyrics with Whisper timing data
+        segments = align_lyrics_with_timings(data['segments'], actual_lyrics_lines)
     
     # Create ASS document header
     ass_content = f"""[Script Info]
@@ -94,9 +149,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     
     # Process each segment
     events = []
-    lyrics_line_idx = 0
     
-    for segment in data['segments']:
+    for segment in segments:
         if 'words' not in segment:
             continue
             
