@@ -201,12 +201,14 @@ deploy-mule: build-linux
 	@sleep 1
 	@echo "$(COLOR_BLUE)→ Creating directories...$(COLOR_RESET)"
 	@ssh $(MULE_HOST) "mkdir -p $(MULE_PATH)/{bin,config,scripts}"
-	@ssh $(MULE_HOST) "mkdir -p $(MULE_DATA_PATH)/{audio,images,videos,temp,logs,python-scripts,branding}"
+	@ssh $(MULE_HOST) "mkdir -p $(MULE_DATA_PATH)/{audio,images,videos,temp,logs,python-scripts,branding,scripts}"
 	@echo "$(COLOR_BLUE)→ Uploading binary...$(COLOR_RESET)"
 	@scp $(BUILD_DIR)/$(BINARY_NAME)-linux $(MULE_HOST):$(MULE_PATH)/bin/$(BINARY_NAME)
 	@ssh $(MULE_HOST) "chmod +x $(MULE_PATH)/bin/$(BINARY_NAME)"
 	@echo "$(COLOR_BLUE)→ Uploading Python scripts...$(COLOR_RESET)"
 	@rsync -avz --progress python-scripts/ $(MULE_HOST):$(MULE_DATA_PATH)/python-scripts/
+	@echo "$(COLOR_BLUE)→ Uploading scripts folder...$(COLOR_RESET)"
+	@rsync -avz --progress scripts/ $(MULE_HOST):$(MULE_DATA_PATH)/scripts/
 	@echo "$(COLOR_BLUE)→ Starting server...$(COLOR_RESET)"
 	@ssh $(MULE_HOST) "cd $(MULE_PATH) && nohup ./bin/$(BINARY_NAME) > server.log 2>&1 &"
 	@sleep 2

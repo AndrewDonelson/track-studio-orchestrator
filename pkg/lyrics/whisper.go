@@ -13,6 +13,7 @@ type WhisperWord struct {
 	Word  string  `json:"word"`
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
+	Score float64 `json:"score,omitempty"`
 }
 
 // WhisperSegment represents a segment/line from Whisper output

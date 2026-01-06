@@ -38,6 +38,12 @@ storage/
 config/youtube_client_secret.json
 config/youtube_token.json
 
+# Python virtual environments
+whisperx_env/
+venv/
+env/
+ENV/
+
 # Logs
 *.log
 logs/

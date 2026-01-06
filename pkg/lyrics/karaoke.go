@@ -1,12 +1,17 @@
 package lyrics
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // KaraokeOptions holds customization settings for karaoke subtitles
@@ -48,6 +53,7 @@ type WhisperResult struct {
 	Segments []WhisperSegment `json:"segments"`
 	Language string           `json:"language,omitempty"`
 	Method   string           `json:"method,omitempty"` // whisperx or faster-whisper
+	Text     string           `json:"text,omitempty"`   // Full transcription text
 }
 
 // NewKaraokeGenerator creates a new karaoke generator instance
@@ -90,6 +96,102 @@ func (kg *KaraokeGenerator) GenerateTimestamps(vocalsPath string, outputJSON str
 		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
+	// Try API method first, fallback to local script
+	result, err := kg.generateTimestampsViaAPI(vocalsPath, outputJSON)
+	if err != nil {
+		log.Printf("API method failed, falling back to local script: %v", err)
+		result, err = kg.generateTimestampsViaScript(vocalsPath, outputJSON)
+		if err != nil {
+			return nil, fmt.Errorf("both API and local methods failed: %w", err)
+		}
+	}
+
+	totalWords := 0
+	for _, seg := range result.Segments {
+		totalWords += len(seg.Words)
+	}
+	log.Printf("Generated %d segments with %d words total", len(result.Segments), totalWords)
+
+	return result, nil
+}
+
+// generateTimestampsViaAPI calls the WhisperX API service
+func (kg *KaraokeGenerator) generateTimestampsViaAPI(vocalsPath string, outputJSON string) (*WhisperResult, error) {
+	// Open the audio file
+	file, err := os.Open(vocalsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open audio file: %w", err)
+	}
+	defer file.Close()
+
+	// Create multipart form data
+	var b bytes.Buffer
+	writer := multipart.NewWriter(&b)
+
+	// Add file
+	fw, err := writer.CreateFormFile("file", filepath.Base(vocalsPath))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create form file: %w", err)
+	}
+	if _, err = io.Copy(fw, file); err != nil {
+		return nil, fmt.Errorf("failed to copy file data: %w", err)
+	}
+
+	// Add other parameters
+	writer.WriteField("language", "en")
+	writer.WriteField("model", kg.WhisperModel)
+	writer.WriteField("align_mode", "false")
+
+	writer.Close()
+
+	// Make HTTP request to WhisperX API
+	apiURL := "http://192.168.1.76:8181/transcribe/sync"
+	req, err := http.NewRequest("POST", apiURL, &b)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{Timeout: 10 * time.Minute} // Long timeout for processing
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var apiResponse map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse API response: %w", err)
+	}
+
+	// Convert API response to WhisperResult format
+	result, err := kg.convertAPIResponseToWhisperResult(apiResponse)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert API response: %w", err)
+	}
+
+	// Save to output file
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal result: %w", err)
+	}
+
+	if err := os.WriteFile(outputJSON, data, 0644); err != nil {
+		return nil, fmt.Errorf("failed to write output file: %w", err)
+	}
+
+	result.Method = "whisperx-api"
+	return result, nil
+}
+
+// generateTimestampsViaScript uses the local Python script (fallback method)
+func (kg *KaraokeGenerator) generateTimestampsViaScript(vocalsPath string, outputJSON string) (*WhisperResult, error) {
 	cmd := exec.Command(
 		kg.PythonPath,
 		filepath.Join(kg.ScriptsDir, "generate_timestamps.py"),
@@ -116,13 +218,71 @@ func (kg *KaraokeGenerator) GenerateTimestamps(vocalsPath string, outputJSON str
 		return nil, fmt.Errorf("failed to parse timestamps: %w", err)
 	}
 
-	totalWords := 0
-	for _, seg := range result.Segments {
-		totalWords += len(seg.Words)
-	}
-	log.Printf("Generated %d segments with %d words total", len(result.Segments), totalWords)
-
 	return &result, nil
+}
+
+// convertAPIResponseToWhisperResult converts WhisperX API response to WhisperResult format
+func (kg *KaraokeGenerator) convertAPIResponseToWhisperResult(apiResponse map[string]interface{}) (*WhisperResult, error) {
+	result := &WhisperResult{}
+
+	// Extract JSON data
+	jsonData, ok := apiResponse["json_data"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("missing json_data in API response")
+	}
+
+	// Convert segments
+	segmentsData, ok := jsonData["segments"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("missing segments in json_data")
+	}
+
+	for _, segData := range segmentsData {
+		segMap, ok := segData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		segment := WhisperSegment{
+			Start: segMap["start"].(float64),
+			End:   segMap["end"].(float64),
+			Text:  segMap["text"].(string),
+		}
+
+		// Convert words
+		wordsData, ok := segMap["words"].([]interface{})
+		if ok {
+			for _, wordData := range wordsData {
+				wordMap, ok := wordData.(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				word := WhisperWord{
+					Start: wordMap["start"].(float64),
+					End:   wordMap["end"].(float64),
+					Word:  wordMap["word"].(string),
+				}
+
+				if score, ok := wordMap["score"].(float64); ok {
+					word.Score = score
+				} else if probability, ok := wordMap["probability"].(float64); ok {
+					word.Score = probability
+				}
+
+				segment.Words = append(segment.Words, word)
+			}
+		}
+
+		result.Segments = append(result.Segments, segment)
+	}
+
+	// Set transcription text
+	if transcription, ok := apiResponse["transcription"].(string); ok {
+		result.Text = transcription
+	}
+
+	return result, nil
 }
 
 // GenerateASSFile generates an ASS subtitle file with karaoke effects
