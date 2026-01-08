@@ -30,12 +30,14 @@ usage() {
     echo "  -i, --input DIR         Input directory (default: /tmp/whisper_input)"
     echo "  --cpu                   Use CPU version instead of GPU"
     echo "  --align                 Force align to provided lyrics (requires LYRICS_FILE)"
+    echo "  --gpu-device N          Set the CUDA GPU device to use (e.g., 0, 1, 2)"
     echo ""
     echo "INPUT_FILE: Path to the audio/video file to process"
     echo "LYRICS_FILE: Path to text file with lyrics (for forced alignment)"
     echo ""
     echo "Examples:"
-    echo "  $0 audio.mp3                    # Basic transcription"
+    echo "  $0 audio.mp3                    # Basic transcription (all GPUs)"
+    echo "  $0 --gpu-device 1 audio.mp3     # Use only GPU 1 for processing"
     echo "  $0 --align audio.mp3 lyrics.txt # Forced alignment with lyrics"
     echo "  $0 -l es --model medium audio.mp3"
     echo "  $0 --cpu audio.wav"
@@ -49,6 +51,7 @@ ALIGN_MODE=false
 LYRICS_FILE=""
 
 # Parse command line arguments
+GPU_DEVICE=""  # Default: use all available GPUs
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
@@ -79,7 +82,11 @@ while [[ $# -gt 0 ]]; do
             ALIGN_MODE=true
             shift
             ;;
-        -*)
+        --gpu-device)
+            GPU_DEVICE="$2"
+            shift 2
+            ;;
+        -* )
             echo "Unknown option: $1"
             usage
             exit 1
@@ -128,8 +135,13 @@ fi
 # Determine image to use
 if [[ "$USE_GPU" == "true" ]]; then
     IMAGE_NAME="emsi/whisperx:latest"
-    GPU_FLAG="--gpus all"
-    echo "Using GPU-enabled WhisperX container"
+    if [[ -n "$GPU_DEVICE" ]]; then
+        GPU_FLAG="--gpus device=$GPU_DEVICE"
+        echo "Using GPU-enabled WhisperX container (GPU device: $GPU_DEVICE)"
+    else
+        GPU_FLAG="--gpus all"
+        echo "Using GPU-enabled WhisperX container (all GPUs)"
+    fi
 else
     IMAGE_NAME="emsi/whisperx:latest"
     GPU_FLAG=""
@@ -174,3 +186,6 @@ docker run --rm \
     bash -c "$CMD"
 
 echo "Transcription completed. Output files are in: $OUTPUT_DIR"
+
+# Usage info for new option
+#   --gpu-device N   Set the CUDA GPU device to use (e.g., 0, 1, 2)

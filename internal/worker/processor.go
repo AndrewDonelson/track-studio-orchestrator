@@ -415,13 +415,21 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song, re
 				continue
 			}
 
-			// Create database entry with extracted prompt
-			dataPath := utils.GetDataPath()
-			relativePath := strings.TrimPrefix(filePath, dataPath+"/")
+			// Always use correct naming for non-verse types
+			var dbFilename string
+			if imageType == "verse" && sequenceNum != nil {
+				dbFilename = fmt.Sprintf("storage/images/song_%d/bg-verse-%d.png", song.ID, *sequenceNum)
+			} else if imageType == "pre-chorus" {
+				dbFilename = fmt.Sprintf("storage/images/song_%d/bg-prechorus.png", song.ID)
+			} else if imageType == "final-chorus" {
+				dbFilename = fmt.Sprintf("storage/images/song_%d/bg-chorus.png", song.ID)
+			} else {
+				dbFilename = fmt.Sprintf("storage/images/song_%d/bg-%s.png", song.ID, imageType)
+			}
 			genImage := &models.GeneratedImage{
 				SongID:         song.ID,
 				QueueID:        &item.ID,
-				ImagePath:      relativePath,
+				ImagePath:      dbFilename,
 				Prompt:         extractedPrompt,
 				NegativePrompt: nil,
 				ImageType:      imageType,
@@ -432,7 +440,7 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song, re
 			}
 
 			if err := database.CreateGeneratedImage(genImage); err != nil {
-				log.Printf("Warning: failed to create database entry for %s: %v", filename, err)
+				log.Printf("Warning: failed to create database entry for %s: %v", dbFilename, err)
 				continue
 			}
 
@@ -473,7 +481,7 @@ func (p *Processor) generateImages(item *models.QueueItem, song *models.Song, re
 
 			// Generate filename based on image type and sequence number
 			var filename string
-			if img.SequenceNumber != nil && *img.SequenceNumber > 0 {
+			if img.ImageType == "verse" && img.SequenceNumber != nil && *img.SequenceNumber > 0 {
 				filename = fmt.Sprintf("bg-%s-%d.png", img.ImageType, *img.SequenceNumber)
 			} else {
 				filename = fmt.Sprintf("bg-%s.png", img.ImageType)

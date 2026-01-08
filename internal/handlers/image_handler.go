@@ -179,8 +179,8 @@ func (h *ImageHandler) regenerateImageAsync(img *models.GeneratedImage) {
 			log.Printf("Warning: failed to delete old image file %s: %v", fullPath, err)
 		}
 	} else {
-		// Generate filename from image type, including sequence number if present
-		if img.SequenceNumber != nil && *img.SequenceNumber > 0 {
+		// Generate filename from image type, including sequence number only for verses
+		if img.ImageType == "verse" && img.SequenceNumber != nil && *img.SequenceNumber > 0 {
 			filename = fmt.Sprintf("bg-%s-%d.png", img.ImageType, *img.SequenceNumber)
 		} else {
 			filename = fmt.Sprintf("bg-%s.png", img.ImageType)
